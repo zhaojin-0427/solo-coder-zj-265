@@ -1,14 +1,65 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api.js';
 
+const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+const estimateHours = (order) => {
+  const sizeMap = { '4寸': 1.5, '6寸': 2, '8寸': 3, '10寸': 4, '12寸': 5, '14寸': 6 };
+  const size = order.size || '6寸';
+  const baseHours = sizeMap[size] || 2;
+  const qty = order.quantity || 1;
+  const hours = baseHours * qty;
+  return Math.ceil(hours * 2) / 2;
+};
+
+const isUrgent = (deliveryTime) => {
+  if (!deliveryTime) return false;
+  const now = new Date();
+  const delivery = new Date(deliveryTime);
+  const diffHours = (delivery - now) / (1000 * 60 * 60);
+  return diffHours > 0 && diffHours <= 24;
+};
+
+const formatDateLabel = (dateStr) => {
+  const d = new Date(dateStr);
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
+  const weekday = WEEKDAYS[d.getDay()];
+  return `${month}月${day}日 ${weekday}`;
+};
+
+const getRiskStyle = (utilization, oversold) => {
+  if (oversold || utilization >= 100) {
+    return {
+      background: 'linear-gradient(135deg, #ffcdd2 0%, #ef9a9a 100%)',
+      border: '1px solid #ef5350',
+      badge: { bg: '#d32f2f', text: 'white', label: '超卖风险' }
+    };
+  }
+  if (utilization >= 85) {
+    return {
+      background: 'linear-gradient(135deg, #ffe0b2 0%, #ffcc80 100%)',
+      border: '1px solid #ffa726',
+      badge: { bg: '#f57c00', text: 'white', label: '高风险' }
+    };
+  }
+  return {
+    background: 'linear-gradient(135deg, #c8e6c9 0%, #a5d6a7 100%)',
+    border: '1px solid #66bb6a',
+    badge: { bg: '#388e3c', text: 'white', label: '正常' }
+  };
+};
+
 export default function OrderSchedule() {
   const [orders, setOrders] = useState([]);
   const [orderStatuses, setOrderStatuses] = useState([]);
+  const [overview, setOverview] = useState([]);
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterPickup, setFilterPickup] = useState('all');
   const [filterDate, setFilterDate] = useState('');
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [showPlanModal, setShowPlanModal] = useState(false);
+  const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [planForm, setPlanForm] = useState({
     scheduledDate: '',
     startTime: '',
@@ -16,10 +67,15 @@ export default function OrderSchedule() {
     baker: '王师傅',
     notes: ''
   });
+  const [rescheduleForm, setRescheduleForm] = useState({
+    newTime: '',
+    reason: ''
+  });
 
   useEffect(() => {
     loadOrders();
     loadOrderStatuses();
+    loadOverview();
   }, [filterStatus, filterPickup, filterDate]);
 
   const loadOrders = async () => {
@@ -44,10 +100,20 @@ export default function OrderSchedule() {
     }
   };
 
+  const loadOverview = async () => {
+    try {
+      const res = await api.getScheduleOverview({ days: 7 });
+      setOverview(res.data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleConfirmOrder = async (orderId) => {
     try {
       await api.updateOrderStatus(orderId, 1);
       loadOrders();
+      loadOverview();
     } catch (e) {
       console.error(e);
     }
@@ -58,6 +124,7 @@ export default function OrderSchedule() {
     try {
       await api.updateOrderStatus(orderId, 6);
       loadOrders();
+      loadOverview();
     } catch (e) {
       console.error(e);
     }
@@ -79,6 +146,15 @@ export default function OrderSchedule() {
     setShowPlanModal(true);
   };
 
+  const openRescheduleModal = (order) => {
+    setSelectedOrder(order);
+    setRescheduleForm({
+      newTime: order.deliveryTime || '',
+      reason: ''
+    });
+    setShowRescheduleModal(true);
+  };
+
   const savePlan = async () => {
     if (!planForm.scheduledDate || !planForm.startTime || !planForm.endTime) {
       alert('请填写完整排期信息');
@@ -88,10 +164,37 @@ export default function OrderSchedule() {
       await api.updateProductionPlan(selectedOrder.id, planForm);
       setShowPlanModal(false);
       loadOrders();
+      loadOverview();
     } catch (e) {
       console.error(e);
       alert('保存失败');
     }
+  };
+
+  const saveReschedule = async () => {
+    if (!rescheduleForm.newTime) {
+      alert('请选择新的配送时间');
+      return;
+    }
+    try {
+      await api.rescheduleOrder({
+        orderId: selectedOrder.id,
+        newTime: rescheduleForm.newTime,
+        reason: rescheduleForm.reason
+      });
+      setShowRescheduleModal(false);
+      setSelectedOrder(null);
+      loadOrders();
+      loadOverview();
+      alert('改期成功');
+    } catch (e) {
+      console.error(e);
+      alert('改期失败');
+    }
+  };
+
+  const handleDateCardClick = (dateStr) => {
+    setFilterDate(dateStr);
   };
 
   const pendingCount = orders.filter(o => o.status === 0).length;
@@ -123,6 +226,100 @@ export default function OrderSchedule() {
           <div className="stat-icon">✅</div>
           <div className="stat-value success">{completedCount}</div>
           <div className="stat-label">已完成</div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{ fontSize: 16, fontWeight: 'bold', color: '#5d4037', marginBottom: 16 }}>
+          📊 未来7天产能概览
+        </div>
+        <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 8 }}>
+          {overview.map(item => {
+            const riskStyle = getRiskStyle(item.utilization, item.oversold);
+            const isSelected = filterDate === item.date;
+            return (
+              <div
+                key={item.date}
+                onClick={() => handleDateCardClick(item.date)}
+                style={{
+                  ...riskStyle,
+                  borderRadius: 12,
+                  padding: 14,
+                  minWidth: 170,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  outline: isSelected ? '3px solid #d4a574' : 'none',
+                  outlineOffset: 2,
+                  flexShrink: 0
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontWeight: 'bold', color: '#3d2e1f', fontSize: 14 }}>
+                    {formatDateLabel(item.date)}
+                  </div>
+                  <span
+                    style={{
+                      background: riskStyle.badge.bg,
+                      color: riskStyle.badge.text,
+                      padding: '2px 8px',
+                      borderRadius: 8,
+                      fontSize: 11,
+                      fontWeight: 600
+                    }}
+                  >
+                    {riskStyle.badge.label}
+                  </span>
+                </div>
+
+                {item.festival && (
+                  <div style={{ marginBottom: 8 }}>
+                    <span
+                      style={{
+                        background: '#fce4ec',
+                        color: '#ad1457',
+                        padding: '2px 8px',
+                        borderRadius: 6,
+                        fontSize: 11,
+                        fontWeight: 500
+                      }}
+                    >
+                      🎉 {item.festival}
+                    </span>
+                  </div>
+                )}
+
+                <div style={{ fontSize: 12, color: '#3d2e1f', marginBottom: 4 }}>
+                  订单数：<strong>{item.totalOrders}</strong> / {item.capacityOrders}
+                </div>
+                <div style={{ fontSize: 12, color: '#3d2e1f', marginBottom: 4 }}>
+                  工时：<strong>{item.usedHours}</strong> / {item.capacityHours}h
+                </div>
+                <div style={{ fontSize: 12, color: '#3d2e1f', marginBottom: 8 }}>
+                  利用率：<strong>{item.utilization}%</strong>
+                </div>
+
+                {item.allergens && item.allergens.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {item.allergens.map((a, i) => (
+                      <span
+                        key={i}
+                        style={{
+                          background: '#ffebee',
+                          color: '#c62828',
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          fontSize: 11,
+                          fontWeight: 500
+                        }}
+                      >
+                        ⚠️ {a.name}×{a.count}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -179,55 +376,112 @@ export default function OrderSchedule() {
             </tr>
           </thead>
           <tbody>
-            {orders.map(order => (
-              <tr key={order.id}>
-                <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{order.id}</td>
-                <td>
-                  <div style={{ fontWeight: 500 }}>{order.cakeName}</div>
-                  <div style={{ fontSize: 12, color: '#8b7355' }}>
-                    {order.size} × {order.quantity}
-                  </div>
-                </td>
-                <td>
-                  <div>{order.customerName}</div>
-                  <div style={{ fontSize: 12, color: '#8b7355' }}>{order.phone}</div>
-                </td>
-                <td>
-                  <span className={`badge ${order.pickupType === 'delivery' ? 'badge-delivery' : 'badge-pickup'}`}>
-                    {order.pickupTypeLabel}
-                  </span>
-                </td>
-                <td>{order.deliveryTime}</td>
-                <td style={{ fontWeight: 'bold', color: '#d32f2f' }}>¥{order.totalPrice}</td>
-                <td>
-                  <span className={`status-badge status-${order.status}`}>
-                    {order.statusLabel}
-                  </span>
-                </td>
-                <td>
-                  <div className="actions-bar">
-                    <button className="btn btn-sm btn-secondary" onClick={() => setSelectedOrder(order)}>
-                      详情
-                    </button>
-                    {order.status === 0 && (
-                      <>
-                        <button className="btn btn-sm btn-success" onClick={() => handleConfirmOrder(order.id)}>
-                          确认
-                        </button>
-                        <button className="btn btn-sm btn-danger" onClick={() => handleCancelOrder(order.id)}>
-                          取消
-                        </button>
-                      </>
+            {orders.map(order => {
+              const hours = estimateHours(order);
+              const urgent = isUrgent(order.deliveryTime);
+              return (
+                <tr key={order.id}>
+                  <td style={{ fontFamily: 'monospace', fontSize: 13 }}>
+                    {order.id}
+                    {urgent && (
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          marginLeft: 6,
+                          background: '#ffebee',
+                          color: '#c62828',
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          fontSize: 11,
+                          fontWeight: 600
+                        }}
+                      >
+                        ⏰临期
+                      </span>
                     )}
-                    {order.status <= 2 && (
-                      <button className="btn btn-sm btn-primary" onClick={() => openPlanModal(order)}>
-                        排期
+                  </td>
+                  <td>
+                    <div style={{ fontWeight: 500 }}>{order.cakeName}</div>
+                    <div style={{ fontSize: 12, color: '#8b7355', marginTop: 2 }}>
+                      {order.size} × {order.quantity}
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          marginLeft: 8,
+                          background: '#f5efe6',
+                          color: '#5d4037',
+                          padding: '1px 6px',
+                          borderRadius: 4,
+                          fontSize: 11
+                        }}
+                      >
+                        约{hours}小时
+                      </span>
+                    </div>
+                    {order.allergens && (
+                      <div style={{ marginTop: 4 }}>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            background: '#ffebee',
+                            color: '#c62828',
+                            padding: '2px 8px',
+                            borderRadius: 6,
+                            fontSize: 11,
+                            fontWeight: 600
+                          }}
+                        >
+                          ⚠️ {order.allergens}
+                        </span>
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <div>{order.customerName}</div>
+                    <div style={{ fontSize: 12, color: '#8b7355' }}>{order.phone}</div>
+                  </td>
+                  <td>
+                    <span className={`badge ${order.pickupType === 'delivery' ? 'badge-delivery' : 'badge-pickup'}`}>
+                      {order.pickupTypeLabel}
+                    </span>
+                  </td>
+                  <td>{order.deliveryTime}</td>
+                  <td style={{ fontWeight: 'bold', color: '#d32f2f' }}>¥{order.totalPrice}</td>
+                  <td>
+                    <span className={`status-badge status-${order.status}`}>
+                      {order.statusLabel}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="actions-bar">
+                      <button className="btn btn-sm btn-secondary" onClick={() => setSelectedOrder(order)}>
+                        详情
                       </button>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
+                      {order.status === 0 && (
+                        <>
+                          <button className="btn btn-sm btn-success" onClick={() => handleConfirmOrder(order.id)}>
+                            确认
+                          </button>
+                          <button className="btn btn-sm btn-danger" onClick={() => handleCancelOrder(order.id)}>
+                            取消
+                          </button>
+                        </>
+                      )}
+                      {order.status <= 2 && (
+                        <>
+                          <button className="btn btn-sm btn-primary" onClick={() => openPlanModal(order)}>
+                            排期
+                          </button>
+                          <button className="btn btn-sm btn-secondary" onClick={() => openRescheduleModal(order)}>
+                            改期
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {orders.length === 0 && (
@@ -238,7 +492,7 @@ export default function OrderSchedule() {
         )}
       </div>
 
-      {selectedOrder && !showPlanModal && (
+      {selectedOrder && !showPlanModal && !showRescheduleModal && (
         <div className="modal-overlay" onClick={() => setSelectedOrder(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
@@ -250,6 +504,19 @@ export default function OrderSchedule() {
               <div className="order-detail-label">蛋糕</div>
               <div className="order-detail-value">
                 <strong>{selectedOrder.cakeName}</strong> ({selectedOrder.size} × {selectedOrder.quantity})
+                <span
+                  style={{
+                    display: 'inline-block',
+                    marginLeft: 8,
+                    background: '#f5efe6',
+                    color: '#5d4037',
+                    padding: '2px 8px',
+                    borderRadius: 6,
+                    fontSize: 12
+                  }}
+                >
+                  预计制作约{estimateHours(selectedOrder)}小时
+                </span>
               </div>
             </div>
             <div className="order-detail-row">
@@ -270,7 +537,25 @@ export default function OrderSchedule() {
             )}
             <div className="order-detail-row">
               <div className="order-detail-label">取货时间</div>
-              <div className="order-detail-value">{selectedOrder.deliveryTime}</div>
+              <div className="order-detail-value">
+                {selectedOrder.deliveryTime}
+                {isUrgent(selectedOrder.deliveryTime) && (
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      marginLeft: 8,
+                      background: '#ffebee',
+                      color: '#c62828',
+                      padding: '2px 8px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: 600
+                    }}
+                  >
+                    ⏰ 临期（24小时内）
+                  </span>
+                )}
+              </div>
             </div>
             <div className="order-detail-row">
               <div className="order-detail-label">下单时间</div>
@@ -278,7 +563,21 @@ export default function OrderSchedule() {
             </div>
             <div className="order-detail-row">
               <div className="order-detail-label">过敏源</div>
-              <div className="order-detail-value">{selectedOrder.allergens}</div>
+              <div className="order-detail-value">
+                {selectedOrder.allergens ? (
+                  <span
+                    style={{
+                      background: '#ffebee',
+                      color: '#c62828',
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      fontWeight: 500
+                    }}
+                  >
+                    ⚠️ {selectedOrder.allergens}
+                  </span>
+                ) : '无'}
+              </div>
             </div>
             <div className="order-detail-row">
               <div className="order-detail-label">装饰偏好</div>
@@ -343,6 +642,11 @@ export default function OrderSchedule() {
             )}
 
             <div className="modal-footer">
+              {selectedOrder.status <= 2 && (
+                <button className="btn btn-secondary" onClick={() => openRescheduleModal(selectedOrder)}>
+                  🔄 改期
+                </button>
+              )}
               <button className="btn btn-secondary" onClick={() => setSelectedOrder(null)}>关闭</button>
             </div>
           </div>
@@ -427,6 +731,47 @@ export default function OrderSchedule() {
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowPlanModal(false)}>取消</button>
               <button className="btn btn-primary" onClick={savePlan}>保存排期</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRescheduleModal && selectedOrder && (
+        <div className="modal-overlay" onClick={() => setShowRescheduleModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">订单改期 - {selectedOrder.id}</div>
+              <button className="modal-close" onClick={() => setShowRescheduleModal(false)}>×</button>
+            </div>
+
+            <div className="alert alert-warning">
+              <div style={{ fontWeight: 500, marginBottom: 4 }}>原配送时间</div>
+              <div style={{ fontSize: 16, fontWeight: 'bold' }}>{selectedOrder.deliveryTime}</div>
+            </div>
+
+            <div className="form-group">
+              <label className="label">新配送时间 *</label>
+              <input
+                type="datetime-local"
+                className="input"
+                value={rescheduleForm.newTime}
+                onChange={e => setRescheduleForm({ ...rescheduleForm, newTime: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="label">改期原因</label>
+              <textarea
+                className="textarea"
+                placeholder="请填写改期原因（选填）"
+                value={rescheduleForm.reason}
+                onChange={e => setRescheduleForm({ ...rescheduleForm, reason: e.target.value })}
+              />
+            </div>
+
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setShowRescheduleModal(false)}>取消</button>
+              <button className="btn btn-primary" onClick={saveReschedule}>确认改期</button>
             </div>
           </div>
         </div>

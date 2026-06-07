@@ -2,6 +2,13 @@ const { v4: uuidv4 } = require('uuid');
 
 const sweetnessLevels = ['1星(微甜)', '2星(轻甜)', '3星(适中)', '4星(较甜)', '5星(很甜)'];
 
+const sizeProductionTime = {
+  '6寸': 1,
+  '8寸': 2,
+  '10寸': 3,
+  '12寸': 4
+};
+
 const cakes = [
   {
     id: 'cake-1',
@@ -14,7 +21,10 @@ const cakes = [
     sweetnessLabel: sweetnessLevels[1],
     shelfLife: '冷藏2-3天',
     category: '奶油蛋糕',
-    sizes: ['6寸', '8寸', '10寸']
+    sizes: ['6寸', '8寸', '10寸'],
+    baseProductionHours: 2,
+    advanceBookingHours: 24,
+    commonAllergens: ['乳制品', '鸡蛋', '小麦']
   },
   {
     id: 'cake-2',
@@ -27,7 +37,10 @@ const cakes = [
     sweetnessLabel: sweetnessLevels[3],
     shelfLife: '冷藏3天',
     category: '巧克力蛋糕',
-    sizes: ['6寸', '8寸']
+    sizes: ['6寸', '8寸'],
+    baseProductionHours: 3,
+    advanceBookingHours: 48,
+    commonAllergens: ['乳制品', '鸡蛋', '小麦', '大豆']
   },
   {
     id: 'cake-3',
@@ -40,7 +53,10 @@ const cakes = [
     sweetnessLabel: sweetnessLevels[1],
     shelfLife: '冷藏2-3天',
     category: '日式蛋糕',
-    sizes: ['6寸', '8寸', '10寸']
+    sizes: ['6寸', '8寸', '10寸'],
+    baseProductionHours: 2,
+    advanceBookingHours: 24,
+    commonAllergens: ['乳制品', '鸡蛋', '小麦']
   },
   {
     id: 'cake-4',
@@ -53,7 +69,10 @@ const cakes = [
     sweetnessLabel: sweetnessLevels[2],
     shelfLife: '冷藏3天',
     category: '慕斯蛋糕',
-    sizes: ['6寸', '8寸']
+    sizes: ['6寸', '8寸'],
+    baseProductionHours: 4,
+    advanceBookingHours: 36,
+    commonAllergens: ['乳制品', '鸡蛋', '小麦']
   },
   {
     id: 'cake-5',
@@ -66,7 +85,10 @@ const cakes = [
     sweetnessLabel: sweetnessLevels[1],
     shelfLife: '冷藏3-4天',
     category: '芝士蛋糕',
-    sizes: ['6寸', '8寸']
+    sizes: ['6寸', '8寸'],
+    baseProductionHours: 3,
+    advanceBookingHours: 24,
+    commonAllergens: ['乳制品', '鸡蛋', '小麦']
   },
   {
     id: 'cake-6',
@@ -79,7 +101,10 @@ const cakes = [
     sweetnessLabel: sweetnessLevels[2],
     shelfLife: '冷藏4-5天',
     category: '芝士蛋糕',
-    sizes: ['6寸', '8寸', '10寸']
+    sizes: ['6寸', '8寸', '10寸'],
+    baseProductionHours: 5,
+    advanceBookingHours: 48,
+    commonAllergens: ['乳制品', '鸡蛋', '小麦']
   },
   {
     id: 'cake-7',
@@ -92,7 +117,10 @@ const cakes = [
     sweetnessLabel: sweetnessLevels[2],
     shelfLife: '冷藏2-3天',
     category: '巧克力蛋糕',
-    sizes: ['8寸', '10寸']
+    sizes: ['8寸', '10寸'],
+    baseProductionHours: 4,
+    advanceBookingHours: 36,
+    commonAllergens: ['乳制品', '鸡蛋', '小麦', '酒精']
   },
   {
     id: 'cake-8',
@@ -105,7 +133,105 @@ const cakes = [
     sweetnessLabel: sweetnessLevels[2],
     shelfLife: '冷藏2天',
     category: '千层蛋糕',
-    sizes: ['6寸', '8寸']
+    sizes: ['6寸', '8寸'],
+    baseProductionHours: 6,
+    advanceBookingHours: 72,
+    commonAllergens: ['乳制品', '鸡蛋', '小麦']
+  }
+];
+
+const festivalSlots = [
+  {
+    id: 'fest-1',
+    name: '情人节特惠',
+    startDate: '2024-02-10',
+    endDate: '2024-02-15',
+    description: '情人节专属档期，浪漫主题蛋糕',
+    capacityMultiplier: 1.5,
+    specialCakes: ['cake-1', 'cake-5'],
+    isActive: true
+  },
+  {
+    id: 'fest-2',
+    name: '母亲节感恩',
+    startDate: '2024-05-01',
+    endDate: '2024-05-12',
+    description: '母亲节鲜花主题，感恩妈妈',
+    capacityMultiplier: 1.3,
+    specialCakes: ['cake-1', 'cake-3', 'cake-6'],
+    isActive: true
+  },
+  {
+    id: 'fest-3',
+    name: '儿童节欢乐',
+    startDate: '2024-05-25',
+    endDate: '2024-06-02',
+    description: '儿童节童趣主题',
+    capacityMultiplier: 1.2,
+    specialCakes: ['cake-1', 'cake-4'],
+    isActive: true
+  },
+  {
+    id: 'fest-4',
+    name: '中秋节团圆',
+    startDate: '2024-09-10',
+    endDate: '2024-09-17',
+    description: '中秋佳节，家庭聚会蛋糕',
+    capacityMultiplier: 1.4,
+    specialCakes: ['cake-6', 'cake-8'],
+    isActive: true
+  },
+  {
+    id: 'fest-5',
+    name: '圣诞节狂欢',
+    startDate: '2024-12-20',
+    endDate: '2024-12-26',
+    description: '圣诞主题，节日限定',
+    capacityMultiplier: 1.6,
+    specialCakes: ['cake-2', 'cake-7'],
+    isActive: true
+  }
+];
+
+const dailyCapacity = {
+  defaultDailyHours: 8,
+  defaultDailyOrders: 15,
+  workStart: '08:00',
+  workEnd: '20:00',
+  dateOverrides: {}
+};
+
+const bookingLogs = [
+  {
+    id: 'blog-1',
+    type: 'rejected',
+    cakeId: 'cake-8',
+    cakeName: '榴莲千层蛋糕',
+    customerName: '潜在客户',
+    requestedTime: '2024-06-10 15:00',
+    reason: '产能不足',
+    time: '2024-06-05 14:30'
+  },
+  {
+    id: 'blog-2',
+    type: 'rescheduled',
+    orderId: 'ord-20240601-001',
+    cakeName: '经典草莓奶油蛋糕',
+    customerName: '张小姐',
+    originalTime: '2024-06-06 10:00',
+    newTime: '2024-06-07 15:00',
+    reason: '客户改期',
+    time: '2024-06-04 09:15'
+  },
+  {
+    id: 'blog-3',
+    type: 'rejected',
+    cakeId: 'cake-6',
+    cakeName: '蓝莓芝士蛋糕',
+    customerName: '潜在客户',
+    requestedTime: '2024-06-08 12:00',
+    reason: '提前预订时间不足',
+    time: '2024-06-07 10:00'
   }
 ];
 
@@ -365,5 +491,9 @@ module.exports = {
   sweetnessLevels,
   stats,
   notifications,
-  uuidv4
+  uuidv4,
+  sizeProductionTime,
+  festivalSlots,
+  dailyCapacity,
+  bookingLogs
 };

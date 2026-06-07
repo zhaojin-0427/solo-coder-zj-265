@@ -4,7 +4,106 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-const { cakes, orders, orderStatuses, sweetnessLevels, stats, notifications, uuidv4 } = require('./data');
+const {
+  cakes, orders, orderStatuses, sweetnessLevels, stats, notifications, uuidv4,
+  sizeProductionTime, festivalSlots, dailyCapacity, bookingLogs
+} = require('./data');
+
+const calcProductionHours = (cakeId, size, quantity = 1) => {
+  const cake = cakes.find(c => c.id === cakeId);
+  if (!cake) return 0;
+  const sizeHours = sizeProductionTime[size] || 2;
+  return (cake.baseProductionHours + sizeHours) * quantity;
+};
+
+const getFestivalByDate = (dateStr) => {
+  const d = dateStr.slice(0, 10);
+  return festivalSlots.find(f => f.isActive && d >= f.startDate && d <= f.endDate);
+};
+
+const getDailyCapacity = (dateStr) => {
+  const d = dateStr.slice(0, 10);
+  if (dailyCapacity.dateOverrides[d]) {
+    return dailyCapacity.dateOverrides[d];
+  }
+  const festival = getFestivalByDate(d);
+  const multiplier = festival ? festival.capacityMultiplier : 1;
+  return {
+    dailyHours: Math.round(dailyCapacity.defaultDailyHours * multiplier),
+    dailyOrders: Math.round(dailyCapacity.defaultDailyOrders * multiplier),
+    workStart: dailyCapacity.workStart,
+    workEnd: dailyCapacity.workEnd,
+    festival
+  };
+};
+
+const getDateUsage = (dateStr) => {
+  const d = dateStr.slice(0, 10);
+  const dayOrders = orders.filter(o => o.status !== 6 && o.deliveryTime && o.deliveryTime.startsWith(d));
+  let usedHours = 0;
+  const allergenMap = {};
+  dayOrders.forEach(o => {
+    usedHours += calcProductionHours(o.cakeId, o.size, o.quantity);
+    if (o.allergens && o.allergens !== '无') {
+      allergenMap[o.allergens] = (allergenMap[o.allergens] || 0) + 1;
+    }
+  });
+  const cap = getDailyCapacity(d);
+  return {
+    date: d,
+    festival: cap.festival,
+    totalOrders: dayOrders.length,
+    capacityOrders: cap.dailyOrders,
+    usedHours: parseFloat(usedHours.toFixed(1)),
+    capacityHours: cap.dailyHours,
+    orders: dayOrders,
+    allergenMap,
+    utilization: cap.dailyHours > 0 ? parseFloat(((usedHours / cap.dailyHours) * 100).toFixed(1)) : 0,
+    orderUtilization: cap.dailyOrders > 0 ? parseFloat(((dayOrders.length / cap.dailyOrders) * 100).toFixed(1)) : 0
+  };
+};
+
+const getAvailableSlots = (cakeId, size, quantity, pickupType, startDate, days = 14) => {
+  const cake = cakes.find(c => c.id === cakeId);
+  if (!cake) return [];
+  const reqHours = calcProductionHours(cakeId, size, quantity);
+  const slots = [];
+  const today = new Date(startDate || new Date());
+  const advHours = cake.advanceBookingHours;
+  for (let i = 0; i < days; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() + i);
+    const dateStr = d.toISOString().slice(0, 10);
+    const usage = getDateUsage(dateStr);
+    const earliest = new Date();
+    earliest.setHours(earliest.getHours() + advHours);
+    const dateObj = new Date(dateStr + 'T23:59:59');
+    if (dateObj < earliest) continue;
+    const hoursLeft = usage.capacityHours - usage.usedHours;
+    const ordersLeft = usage.capacityOrders - usage.totalOrders;
+    if (hoursLeft >= reqHours && ordersLeft >= quantity) {
+      slots.push({
+        date: dateStr,
+        festival: usage.festival,
+        available: true,
+        hoursLeft: parseFloat(hoursLeft.toFixed(1)),
+        ordersLeft,
+        utilization: usage.utilization
+      });
+    } else {
+      slots.push({
+        date: dateStr,
+        festival: usage.festival,
+        available: false,
+        hoursLeft: parseFloat(Math.max(0, hoursLeft).toFixed(1)),
+        ordersLeft: Math.max(0, ordersLeft),
+        utilization: usage.utilization,
+        reason: hoursLeft < reqHours ? '产能工时不足' : '当日订单已满'
+      });
+    }
+  }
+  return slots;
+};
 
 const app = express();
 const PORT = 9203;
@@ -351,6 +450,62 @@ app.get('/api/stats', (req, res) => {
   const onTime = baseOnTime + Math.max(onTimeDeliveries, completedDeliveries - 1);
   const onTimeRate = totalDeliveries > 0 ? parseFloat(((onTime / totalDeliveries) * 100).toFixed(2)) : 0;
   
+  const festivalOrderCounts = {};
+  festivalSlots.forEach(f => {
+    festivalOrderCounts[f.id] = {
+      festivalId: f.id,
+      festivalName: f.name,
+      count: 0
+    };
+  });
+  orders.forEach(order => {
+    if (order.deliveryTime) {
+      const d = order.deliveryTime.slice(0, 10);
+      const fest = festivalSlots.find(f => d >= f.startDate && d <= f.endDate);
+      if (fest && festivalOrderCounts[fest.id]) {
+        festivalOrderCounts[fest.id].count += order.quantity;
+      }
+    }
+  });
+
+  const baseFestival = {
+    'fest-1': 28, 'fest-2': 35, 'fest-3': 22, 'fest-4': 30, 'fest-5': 40
+  };
+  Object.values(festivalOrderCounts).forEach(f => {
+    f.count += baseFestival[f.festivalId] || 0;
+  });
+
+  const rejectedBookings = bookingLogs.filter(b => b.type === 'rejected').length;
+  const rescheduledBookings = bookingLogs.filter(b => b.type === 'rescheduled').length;
+  const baseRejected = 12;
+  const baseRescheduled = 8;
+
+  const recent30Days = [];
+  const totalCapacity = [];
+  const avgUtilizationData = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().slice(0, 10);
+    const usage = getDateUsage(dateStr);
+    recent30Days.push({
+      date: dateStr,
+      utilization: usage.utilization || 0,
+      orders: usage.totalOrders || 0
+    });
+  }
+
+  const avgUtilization = recent30Days.reduce((s, d) => s + d.utilization, 0) / (recent30Days.length || 1);
+
+  const allergenStats = {};
+  const baseAllergens = { '乳制品': 15, '坚果': 8, '花生': 10, '鸡蛋': 6, '小麦': 4, '乳糖': 5 };
+  Object.assign(allergenStats, baseAllergens);
+  orders.forEach(o => {
+    if (o.allergens && o.allergens !== '无') {
+      allergenStats[o.allergens] = (allergenStats[o.allergens] || 0) + 1;
+    }
+  });
+
   res.json({
     cakeOrders: Object.values(cakeOrderCounts),
     peakHours,
@@ -364,7 +519,37 @@ app.get('/api/stats', (req, res) => {
       repeatCustomers,
       repeatRate,
       newCustomersThisMonth: 32 + newCustomersThisMonth
-    }
+    },
+    festivalStats: {
+      festivalOrders: Object.values(festivalOrderCounts),
+      totalFestivalOrders: Object.values(festivalOrderCounts).reduce((s, f) => s + f.count, 0)
+    },
+    capacityStats: {
+      avgUtilization: parseFloat(avgUtilization.toFixed(1)),
+      dailyUtilization: recent30Days,
+      defaultDailyHours: dailyCapacity.defaultDailyHours,
+      defaultDailyOrders: dailyCapacity.defaultDailyOrders
+    },
+    bookingStats: {
+      rejectedCount: baseRejected + rejectedBookings,
+      rescheduledCount: baseRescheduled + rescheduledBookings,
+      total: baseRejected + rejectedBookings + baseRescheduled + rescheduledBookings,
+      logs: bookingLogs.slice(0, 20)
+    },
+    popularSlots: festivalSlots.map(f => {
+      const fo = festivalOrderCounts[f.id];
+      return {
+        festivalId: f.id,
+        festivalName: f.name,
+        startDate: f.startDate,
+        endDate: f.endDate,
+        orderCount: fo ? fo.count : 0,
+        capacityMultiplier: f.capacityMultiplier
+      };
+    }).sort((a, b) => b.orderCount - a.orderCount),
+    allergenStats: Object.entries(allergenStats)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
   });
 });
 
@@ -393,6 +578,259 @@ app.get('/api/sweetness-levels', (req, res) => {
 
 app.get('/api/order-statuses', (req, res) => {
   res.json(orderStatuses);
+});
+
+app.get('/api/festivals', (req, res) => {
+  res.json(festivalSlots);
+});
+
+app.post('/api/festivals', (req, res) => {
+  const fest = {
+    id: `fest-${Date.now()}`,
+    name: req.body.name,
+    startDate: req.body.startDate,
+    endDate: req.body.endDate,
+    description: req.body.description || '',
+    capacityMultiplier: parseFloat(req.body.capacityMultiplier) || 1,
+    specialCakes: req.body.specialCakes || [],
+    isActive: req.body.isActive !== false
+  };
+  festivalSlots.push(fest);
+  res.status(201).json(fest);
+});
+
+app.put('/api/festivals/:id', (req, res) => {
+  const fest = festivalSlots.find(f => f.id === req.params.id);
+  if (!fest) {
+    res.status(404).json({ error: '节日档期不存在' });
+    return;
+  }
+  Object.assign(fest, req.body);
+  res.json(fest);
+});
+
+app.delete('/api/festivals/:id', (req, res) => {
+  const idx = festivalSlots.findIndex(f => f.id === req.params.id);
+  if (idx === -1) {
+    res.status(404).json({ error: '节日档期不存在' });
+    return;
+  }
+  festivalSlots.splice(idx, 1);
+  res.json({ success: true });
+});
+
+app.get('/api/capacity', (req, res) => {
+  res.json({
+    ...dailyCapacity,
+    sizeProductionTime
+  });
+});
+
+app.put('/api/capacity', (req, res) => {
+  if (req.body.defaultDailyHours !== undefined) dailyCapacity.defaultDailyHours = parseInt(req.body.defaultDailyHours);
+  if (req.body.defaultDailyOrders !== undefined) dailyCapacity.defaultDailyOrders = parseInt(req.body.defaultDailyOrders);
+  if (req.body.workStart !== undefined) dailyCapacity.workStart = req.body.workStart;
+  if (req.body.workEnd !== undefined) dailyCapacity.workEnd = req.body.workEnd;
+  res.json(dailyCapacity);
+});
+
+app.put('/api/capacity/date/:date', (req, res) => {
+  const d = req.params.date;
+  dailyCapacity.dateOverrides[d] = {
+    dailyHours: parseInt(req.body.dailyHours),
+    dailyOrders: parseInt(req.body.dailyOrders),
+    workStart: req.body.workStart || dailyCapacity.workStart,
+    workEnd: req.body.workEnd || dailyCapacity.workEnd
+  };
+  res.json(dailyCapacity.dateOverrides[d]);
+});
+
+app.delete('/api/capacity/date/:date', (req, res) => {
+  delete dailyCapacity.dateOverrides[req.params.date];
+  res.json({ success: true });
+});
+
+app.put('/api/cakes/:id/production', (req, res) => {
+  const cake = cakes.find(c => c.id === req.params.id);
+  if (!cake) {
+    res.status(404).json({ error: '蛋糕不存在' });
+    return;
+  }
+  if (req.body.baseProductionHours !== undefined) cake.baseProductionHours = parseInt(req.body.baseProductionHours);
+  if (req.body.advanceBookingHours !== undefined) cake.advanceBookingHours = parseInt(req.body.advanceBookingHours);
+  if (req.body.commonAllergens !== undefined) cake.commonAllergens = req.body.commonAllergens;
+  res.json(cake);
+});
+
+app.post('/api/booking/check', (req, res) => {
+  const { cakeId, size, quantity, pickupType, deliveryTime } = req.body;
+  const cake = cakes.find(c => c.id === cakeId);
+  if (!cake) {
+    res.status(404).json({ error: '蛋糕不存在' });
+    return;
+  }
+  const errors = [];
+  const warnings = [];
+  const now = new Date();
+  const delivery = new Date(deliveryTime.replace(' ', 'T'));
+  const diffHours = (delivery - now) / (1000 * 60 * 60);
+  if (diffHours < cake.advanceBookingHours) {
+    errors.push(`该款式需提前 ${cake.advanceBookingHours} 小时预订，当前仅提前 ${Math.round(diffHours)} 小时`);
+  }
+  if (delivery.getHours() < 8 || delivery.getHours() >= 20) {
+    warnings.push('取货时间建议在 08:00-20:00 之间');
+  }
+  const usage = getDateUsage(deliveryTime);
+  const reqHours = calcProductionHours(cakeId, size, quantity);
+  const hoursLeft = usage.capacityHours - usage.usedHours;
+  const ordersLeft = usage.capacityOrders - usage.totalOrders;
+  if (hoursLeft < reqHours) {
+    errors.push(`当日产能工时不足，需要 ${reqHours} 小时，剩余 ${Math.max(0, hoursLeft).toFixed(1)} 小时`);
+  }
+  if (ordersLeft < quantity) {
+    errors.push(`当日订单已满，最多可接 ${Math.max(0, ordersLeft)} 单`);
+  }
+  if (usage.utilization >= 85) {
+    warnings.push(`当日产能利用率已达 ${usage.utilization}%，排期较紧张`);
+  }
+  const festival = getFestivalByDate(deliveryTime);
+  if (festival) {
+    warnings.push(`${deliveryTime.slice(0, 10)} 正处于「${festival.name}」档期`);
+  }
+  const similarCakes = [];
+  if (errors.length > 0) {
+    cakes.forEach(c => {
+      if (c.id !== cakeId && c.category === cake.category) {
+        const s = getAvailableSlots(c.id, size, quantity, pickupType, deliveryTime, 3);
+        const firstAvail = s.find(x => x.available);
+        if (firstAvail) {
+          similarCakes.push({
+            cakeId: c.id,
+            cakeName: c.name,
+            price: c.price,
+            image: c.image,
+            baseProductionHours: c.baseProductionHours,
+            advanceBookingHours: c.advanceBookingHours,
+            suggestedDate: firstAvail.date
+          });
+        }
+      }
+    });
+  }
+  const alternativeSlots = getAvailableSlots(cakeId, size, quantity, pickupType, deliveryTime, 10)
+    .filter(s => s.available)
+    .slice(0, 5);
+  if (errors.length > 0 && alternativeSlots.length === 0) {
+    bookingLogs.push({
+      id: `blog-${Date.now()}`,
+      type: 'rejected',
+      cakeId,
+      cakeName: cake.name,
+      customerName: req.body.customerName || '潜在客户',
+      requestedTime: deliveryTime,
+      reason: errors.join('; '),
+      time: new Date().toISOString().replace('T', ' ').slice(0, 16)
+    });
+  }
+  res.json({
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    requiredHours: reqHours,
+    advanceBookingHours: cake.advanceBookingHours,
+    dailyUsage: {
+      date: usage.date,
+      usedHours: usage.usedHours,
+      capacityHours: usage.capacityHours,
+      totalOrders: usage.totalOrders,
+      capacityOrders: usage.capacityOrders,
+      utilization: usage.utilization,
+      festival: usage.festival
+    },
+    alternativeSlots,
+    similarCakes: similarCakes.slice(0, 3)
+  });
+});
+
+app.get('/api/schedule/overview', (req, res) => {
+  const { startDate, days = 7 } = req.query;
+  const result = [];
+  const base = new Date(startDate || new Date());
+  for (let i = 0; i < parseInt(days); i++) {
+    const d = new Date(base);
+    d.setDate(d.getDate() + i);
+    const dateStr = d.toISOString().slice(0, 10);
+    const usage = getDateUsage(dateStr);
+    result.push({
+      date: dateStr,
+      festival: usage.festival,
+      totalOrders: usage.totalOrders,
+      capacityOrders: usage.capacityOrders,
+      usedHours: usage.usedHours,
+      capacityHours: usage.capacityHours,
+      utilization: usage.utilization,
+      orderUtilization: usage.orderUtilization,
+      oversold: usage.utilization >= 100 || usage.orderUtilization >= 100,
+      risk: usage.utilization >= 85 ? usage.utilization >= 100 ? 'high' : 'medium' : 'low',
+      allergens: Object.entries(usage.allergenMap).map(([k, v]) => ({ name: k, count: v }))
+    });
+  }
+  res.json(result);
+});
+
+app.get('/api/production-board/sorted', (req, res) => {
+  const productionOrders = orders
+    .filter(o => o.status >= 1 && o.status <= 4)
+    .map(o => {
+      const hours = calcProductionHours(o.cakeId, o.size, o.quantity);
+      const now = new Date();
+      const delivery = new Date((o.deliveryTime || '').replace(' ', 'T'));
+      const hoursToDelivery = (delivery - now) / (1000 * 60 * 60);
+      let urgency = 'normal';
+      if (hoursToDelivery < 6) urgency = 'critical';
+      else if (hoursToDelivery < 24) urgency = 'urgent';
+      else if (hoursToDelivery < 48) urgency = 'soon';
+      return {
+        ...o,
+        productionHours: hours,
+        hoursToDelivery: parseFloat(hoursToDelivery.toFixed(1)),
+        urgency
+      };
+    })
+    .sort((a, b) => {
+      const urgencyWeight = { critical: 0, urgent: 1, soon: 2, normal: 3 };
+      if (urgencyWeight[a.urgency] !== urgencyWeight[b.urgency]) {
+        return urgencyWeight[a.urgency] - urgencyWeight[b.urgency];
+      }
+      return a.hoursToDelivery - b.hoursToDelivery;
+    });
+  res.json(productionOrders);
+});
+
+app.get('/api/booking-logs', (req, res) => {
+  res.json(bookingLogs);
+});
+
+app.post('/api/orders/reschedule', (req, res) => {
+  const { orderId, newTime, reason } = req.body;
+  const order = orders.find(o => o.id === orderId);
+  if (!order) {
+    res.status(404).json({ error: '订单不存在' });
+    return;
+  }
+  bookingLogs.push({
+    id: `blog-${Date.now()}`,
+    type: 'rescheduled',
+    orderId,
+    cakeName: order.cakeName,
+    customerName: order.customerName,
+    originalTime: order.deliveryTime,
+    newTime,
+    reason: reason || '客户改期',
+    time: new Date().toISOString().replace('T', ' ').slice(0, 16)
+  });
+  order.deliveryTime = newTime;
+  res.json(order);
 });
 
 app.listen(PORT, () => {

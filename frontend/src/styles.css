@@ -906,6 +906,207 @@ body {
   border: 1px solid #ffecb3;
 }
 
+.alert-danger {
+  background: #ffebee;
+  color: #c62828;
+  border: 1px solid #ffcdd2;
+}
+
+.alert-info {
+  background: #e3f2fd;
+  color: #1565c0;
+  border: 1px solid #bbdefb;
+}
+
+.booking-info-bar {
+  background: #faf5ee;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
+  border: 1px solid #e0d4c3;
+}
+
+.booking-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.booking-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.booking-info-label {
+  font-size: 12px;
+  color: #8b7355;
+}
+
+.booking-info-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: #5d4037;
+}
+
+.allergen-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.allergen-tag {
+  background: #ffebee;
+  color: #c62828;
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.capacity-bar-container {
+  margin-top: 8px;
+}
+
+.capacity-bar {
+  height: 10px;
+  background: #f0e6d8;
+  border-radius: 5px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.capacity-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.3s;
+}
+
+.capacity-bar-fill.low {
+  background: #66bb6a;
+}
+
+.capacity-bar-fill.medium {
+  background: #ffa726;
+}
+
+.capacity-bar-fill.high {
+  background: #ef5350;
+}
+
+.capacity-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #8b7355;
+  margin-top: 6px;
+}
+
+.suggestions-section {
+  margin-top: 16px;
+}
+
+.suggestions-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #5d4037;
+  margin-bottom: 10px;
+}
+
+.slot-cards, .cake-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.slot-card, .similar-cake-card {
+  background: white;
+  border: 2px solid #e0d4c3;
+  border-radius: 12px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.slot-card:hover, .similar-cake-card:hover {
+  border-color: #d4a574;
+  background: #fdf5ea;
+  transform: translateY(-2px);
+}
+
+.slot-card-date {
+  font-size: 13px;
+  font-weight: 600;
+  color: #5d4037;
+  margin-bottom: 6px;
+}
+
+.slot-card-info {
+  font-size: 12px;
+  color: #8b7355;
+}
+
+.slot-card-utilization {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.similar-cake-card {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.similar-cake-image {
+  width: 50px;
+  height: 50px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.similar-cake-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.similar-cake-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #5d4037;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.similar-cake-price {
+  font-size: 13px;
+  color: #d32f2f;
+  font-weight: 600;
+}
+
+.similar-cake-date {
+  font-size: 11px;
+  color: #8b7355;
+  margin-top: 2px;
+}
+
+.checking-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e0d4c3;
+  border-top-color: #d4a574;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 @media (max-width: 768px) {
   .cake-detail {
     grid-template-columns: 1fr;

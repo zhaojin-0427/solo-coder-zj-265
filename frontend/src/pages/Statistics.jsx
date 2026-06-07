@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line
+  PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line,
+  ReferenceLine
 } from 'recharts';
 import { api } from '../api.js';
 
@@ -47,6 +48,26 @@ export default function Statistics() {
           <div className="stat-icon">🎂</div>
           <div className="stat-value">{totalCakeOrders}</div>
           <div className="stat-label">总预订量</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon">🎉</div>
+          <div className="stat-value highlight">{stats.festivalStats?.totalFestivalOrders ?? 0}</div>
+          <div className="stat-label">节日档期订单</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon">📊</div>
+          <div className="stat-value success">{stats.capacityStats?.avgUtilization ?? 0}%</div>
+          <div className="stat-label">平均产能利用率</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon">❌</div>
+          <div className="stat-value" style={{ color: '#d32f2f' }}>{stats.bookingStats?.rejectedCount ?? 0}</div>
+          <div className="stat-label">被拒绝预约</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon">🔄</div>
+          <div className="stat-value highlight">{stats.bookingStats?.rescheduledCount ?? 0}</div>
+          <div className="stat-label">被改期预约</div>
         </div>
         <div className="stat-card">
           <div className="stat-icon">🚚</div>
@@ -114,12 +135,15 @@ export default function Statistics() {
 
       <div className="charts-row">
         <div className="chart-card">
-          <div className="chart-title">📈 高峰时段订单分布</div>
+          <div className="chart-title">🎉 节日档期订单量排行</div>
           <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={stats.peakHours}>
+            <BarChart
+              data={(stats.festivalStats?.festivalOrders || []).sort((a, b) => b.count - a.count)}
+              layout="vertical"
+            >
               <CartesianGrid strokeDasharray="3 3" stroke="#f0e6d8" />
-              <XAxis dataKey="hour" stroke="#8b7355" />
-              <YAxis stroke="#8b7355" />
+              <XAxis type="number" stroke="#8b7355" />
+              <YAxis type="category" dataKey="festivalName" stroke="#8b7355" width={120} />
               <Tooltip
                 contentStyle={{
                   background: 'white',
@@ -127,21 +151,142 @@ export default function Statistics() {
                   borderRadius: 10,
                   padding: 12
                 }}
-                formatter={(value) => [`${value} 单`, '订单数']}
+                formatter={(value) => [`${value} 单`, '订单量']}
+              />
+              <Bar dataKey="count" fill="#b8860b" radius={[0, 8, 8, 0]}>
+                {(stats.festivalStats?.festivalOrders || []).map((entry, index) => (
+                  <Cell key={`cell-festival-${index}`} fill={COLORS[index % COLORS.length]} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="chart-card">
+          <div className="chart-title">📊 近30天产能利用率趋势</div>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={stats.capacityStats?.dailyUtilization || []}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0e6d8" />
+              <XAxis dataKey="date" stroke="#8b7355" tick={{ fontSize: 11 }} />
+              <YAxis stroke="#8b7355" domain={[0, 'auto']} />
+              <Tooltip
+                contentStyle={{
+                  background: 'white',
+                  border: '1px solid #e0d4c3',
+                  borderRadius: 10,
+                  padding: 12
+                }}
+                formatter={(value, name) => {
+                  if (name === 'utilization') return [`${value}%`, '产能利用率'];
+                  if (name === 'orders') return [`${value} 单`, '订单数'];
+                  return [value, name];
+                }}
+              />
+              <Legend />
+              <ReferenceLine
+                y={85}
+                stroke="#f57c00"
+                strokeDasharray="5 5"
+                strokeWidth={2}
+                label={{ value: '高风险线 85%', position: 'right', fill: '#f57c00', fontSize: 11 }}
+              />
+              <ReferenceLine
+                y={100}
+                stroke="#d32f2f"
+                strokeDasharray="5 5"
+                strokeWidth={2}
+                label={{ value: '超卖线 100%', position: 'right', fill: '#d32f2f', fontSize: 11 }}
               />
               <Line
                 type="monotone"
-                dataKey="count"
-                stroke="#b8860b"
+                dataKey="utilization"
+                name="产能利用率"
+                stroke="#1976d2"
                 strokeWidth={3}
-                dot={{ fill: '#b8860b', r: 5 }}
-                activeDot={{ r: 8 }}
-                fill="#fdf5ea"
+                dot={{ fill: '#1976d2', r: 3 }}
+                activeDot={{ r: 6 }}
               />
             </LineChart>
           </ResponsiveContainer>
         </div>
+      </div>
 
+      <div className="charts-row">
+        <div className="chart-card">
+          <div className="chart-title">🔥 热门档期分布</div>
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={stats.popularSlots || []}
+                cx="50%"
+                cy="50%"
+                outerRadius={100}
+                dataKey="orderCount"
+                nameKey="festivalName"
+                paddingAngle={2}
+                label={({ festivalName, orderCount, percent }) =>
+                  `${festivalName}: ${orderCount}单 (${(percent * 100).toFixed(1)}%)`
+                }
+                labelLine={{ stroke: '#8b7355' }}
+              >
+                {(stats.popularSlots || []).map((entry, index) => (
+                  <Cell key={`cell-slot-${index}`} fill={COLORS[index % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip
+                contentStyle={{
+                  background: 'white',
+                  border: '1px solid #e0d4c3',
+                  borderRadius: 10,
+                  padding: 12
+                }}
+                formatter={(value, name) => {
+                  if (name === 'orderCount') return [`${value} 单`, '订单数'];
+                  return [value, name];
+                }}
+              />
+              <Legend />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="chart-card">
+          <div className="chart-title">⚠️ 预约异常统计</div>
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={[
+                  { name: '被拒绝', value: stats.bookingStats?.rejectedCount ?? 0 },
+                  { name: '被改期', value: stats.bookingStats?.rescheduledCount ?? 0 }
+                ]}
+                cx="50%"
+                cy="50%"
+                innerRadius={50}
+                outerRadius={100}
+                dataKey="value"
+                label={({ name, value, percent }) =>
+                  `${name}: ${value} (${(percent * 100).toFixed(1)}%)`
+                }
+              >
+                <Cell fill="#d32f2f" />
+                <Cell fill="#f57c00" />
+              </Pie>
+              <Tooltip
+                contentStyle={{
+                  background: 'white',
+                  border: '1px solid #e0d4c3',
+                  borderRadius: 10,
+                  padding: 12
+                }}
+                formatter={(value) => [`${value} 次`, '']}
+              />
+              <Legend />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="charts-row">
         <div className="chart-card">
           <div className="chart-title">🥧 客户结构分布</div>
           <ResponsiveContainer width="100%" height={300}>
@@ -175,9 +320,79 @@ export default function Statistics() {
             </PieChart>
           </ResponsiveContainer>
         </div>
+
+        <div className="chart-card">
+          <div className="chart-title">🌾 过敏源分布 TOP10</div>
+          {stats.allergenStats && stats.allergenStats.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={stats.allergenStats.slice(0, 10)}
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={100}
+                  dataKey="count"
+                  nameKey="name"
+                  paddingAngle={2}
+                  label={({ name, count, percent }) =>
+                    `${name}: ${count} (${(percent * 100).toFixed(1)}%)`
+                  }
+                  labelLine={{ stroke: '#8b7355' }}
+                >
+                  {stats.allergenStats.slice(0, 10).map((entry, index) => (
+                    <Cell key={`cell-allergen-${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={{
+                    background: 'white',
+                    border: '1px solid #e0d4c3',
+                    borderRadius: 10,
+                    padding: 12
+                  }}
+                  formatter={(value) => [`${value} 次`, '出现次数']}
+                />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="empty-state" style={{ height: 280 }}>
+              <div className="empty-state-text">暂无过敏源数据</div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="charts-row">
+        <div className="chart-card">
+          <div className="chart-title">📈 高峰时段订单分布</div>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={stats.peakHours}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0e6d8" />
+              <XAxis dataKey="hour" stroke="#8b7355" />
+              <YAxis stroke="#8b7355" />
+              <Tooltip
+                contentStyle={{
+                  background: 'white',
+                  border: '1px solid #e0d4c3',
+                  borderRadius: 10,
+                  padding: 12
+                }}
+                formatter={(value) => [`${value} 单`, '订单数']}
+              />
+              <Line
+                type="monotone"
+                dataKey="count"
+                stroke="#b8860b"
+                strokeWidth={3}
+                dot={{ fill: '#b8860b', r: 5 }}
+                activeDot={{ r: 8 }}
+                fill="#fdf5ea"
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
         <div className="chart-card">
           <div className="chart-title">🚚 配送准时率分析</div>
           <ResponsiveContainer width="100%" height={280}>
@@ -227,7 +442,9 @@ export default function Statistics() {
             </div>
           </div>
         </div>
+      </div>
 
+      <div className="charts-row">
         <div className="chart-card">
           <div className="chart-title">🎯 预订量 TOP5 蛋糕</div>
           <table className="table" style={{ marginTop: 10 }}>
@@ -268,6 +485,54 @@ export default function Statistics() {
                     </td>
                   </tr>
                 ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="chart-card">
+          <div className="chart-title">🔥 热门档期 TOP5</div>
+          <table className="table" style={{ marginTop: 10 }}>
+            <thead>
+              <tr>
+                <th style={{ width: 50 }}>排名</th>
+                <th>档期名称</th>
+                <th style={{ width: 100, textAlign: 'right' }}>订单数</th>
+                <th style={{ width: 100, textAlign: 'right' }}>产能倍数</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(stats.popularSlots || []).slice(0, 5).map((slot, idx) => (
+                <tr key={`slot-${slot.festivalId}-${idx}`}>
+                  <td>
+                    <span style={{
+                      display: 'inline-flex',
+                      width: 28,
+                      height: 28,
+                      borderRadius: '50%',
+                      background: idx < 3 ? '#d4a574' : '#e8d5be',
+                      color: idx < 3 ? 'white' : '#8b7355',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 'bold',
+                      fontSize: 13
+                    }}>
+                      {idx + 1}
+                    </span>
+                  </td>
+                  <td>{slot.festivalName}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 500 }}>{slot.orderCount} 单</td>
+                  <td style={{ textAlign: 'right', color: '#b8860b' }}>
+                    {slot.capacityMultiplier}x
+                  </td>
+                </tr>
+              ))}
+              {(stats.popularSlots || []).length === 0 && (
+                <tr>
+                  <td colSpan={4} style={{ textAlign: 'center', color: '#8b7355', padding: 24 }}>
+                    暂无热门档期数据
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

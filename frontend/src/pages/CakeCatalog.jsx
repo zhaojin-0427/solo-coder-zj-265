@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api.js';
 
 export default function CakeCatalog() {
@@ -20,6 +20,9 @@ export default function CakeCatalog() {
     decorationNote: ''
   });
   const [orderSuccess, setOrderSuccess] = useState(false);
+  const [bookingCheckResult, setBookingCheckResult] = useState(null);
+  const [isCheckingBooking, setIsCheckingBooking] = useState(false);
+  const debounceTimerRef = useRef(null);
 
   useEffect(() => {
     loadCakes();
@@ -49,6 +52,75 @@ export default function CakeCatalog() {
     setOrderForm(prev => ({ ...prev, size: cake.sizes[0] }));
     setShowOrderModal(true);
     setOrderSuccess(false);
+    setBookingCheckResult(null);
+    setIsCheckingBooking(false);
+  };
+
+  const performBookingCheck = useCallback(async () => {
+    if (!selectedCake || !orderForm.deliveryTime || !orderForm.size || orderForm.quantity < 1) {
+      setBookingCheckResult(null);
+      return;
+    }
+
+    setIsCheckingBooking(true);
+    try {
+      const res = await api.checkBooking({
+        cakeId: selectedCake.id,
+        size: orderForm.size,
+        quantity: orderForm.quantity,
+        pickupType: orderForm.pickupType,
+        deliveryTime: orderForm.deliveryTime
+      });
+      setBookingCheckResult(res.data);
+    } catch (e) {
+      console.error('预约校验失败', e);
+      setBookingCheckResult(null);
+    } finally {
+      setIsCheckingBooking(false);
+    }
+  }, [selectedCake, orderForm.deliveryTime, orderForm.size, orderForm.quantity, orderForm.pickupType]);
+
+  const debouncedCheckBooking = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = setTimeout(() => {
+      performBookingCheck();
+    }, 500);
+  }, [performBookingCheck]);
+
+  useEffect(() => {
+    if (showOrderModal && selectedCake) {
+      debouncedCheckBooking();
+    }
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [orderForm.deliveryTime, orderForm.quantity, orderForm.size, showOrderModal, selectedCake, debouncedCheckBooking]);
+
+  const handleSlotClick = (slot) => {
+    const dateStr = slot.date;
+    const currentTime = orderForm.deliveryTime ? orderForm.deliveryTime.split('T')[1] : '10:00';
+    setOrderForm(prev => ({
+      ...prev,
+      deliveryTime: `${dateStr}T${currentTime || '10:00'}`
+    }));
+  };
+
+  const handleSimilarCakeClick = (similarCake) => {
+    const cake = cakes.find(c => c.id === similarCake.cakeId);
+    if (cake) {
+      setSelectedCake(cake);
+      setOrderForm(prev => ({
+        ...prev,
+        size: cake.sizes[0] || '',
+        deliveryTime: similarCake.suggestedDate
+          ? `${similarCake.suggestedDate}T${prev.deliveryTime ? prev.deliveryTime.split('T')[1] : '10:00'}`
+          : prev.deliveryTime
+      }));
+    }
   };
 
   const submitOrder = async () => {
@@ -58,6 +130,10 @@ export default function CakeCatalog() {
     }
     if (orderForm.pickupType === 'delivery' && !orderForm.address) {
       alert('请填写配送地址');
+      return;
+    }
+    if (bookingCheckResult && bookingCheckResult.errors && bookingCheckResult.errors.length > 0) {
+      alert('请先解决订单校验中的错误问题');
       return;
     }
 
@@ -81,6 +157,7 @@ export default function CakeCatalog() {
           allergens: '',
           decorationNote: ''
         });
+        setBookingCheckResult(null);
       }, 2000);
     } catch (e) {
       alert('提交订单失败，请重试');
@@ -96,6 +173,195 @@ export default function CakeCatalog() {
         ))}
       </div>
     );
+  };
+
+  const getUtilizationLevel = (utilization) => {
+    if (utilization < 60) return 'low';
+    if (utilization < 85) return 'medium';
+    return 'high';
+  };
+
+  const formatDate = (dateStr) => {
+    try {
+      const date = new Date(dateStr);
+      const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+      return `${date.getMonth() + 1}月${date.getDate()}日 ${weekdays[date.getDay()]}`;
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const renderBookingInfoBar = () => {
+    const baseHours = selectedCake?.baseProductionHours ?? 2;
+    const advanceHours = selectedCake?.advanceBookingHours ?? 24;
+    const allergens = selectedCake?.commonAllergens || [];
+
+    return (
+      <div className="booking-info-bar">
+        <div className="booking-info-grid">
+          <div className="booking-info-item">
+            <span className="booking-info-label">⏱️ 基础制作耗时</span>
+            <span className="booking-info-value">{baseHours} 小时</span>
+          </div>
+          <div className="booking-info-item">
+            <span className="booking-info-label">📅 提前预订时间</span>
+            <span className="booking-info-value">{advanceHours} 小时前</span>
+          </div>
+          <div className="booking-info-item">
+            <span className="booking-info-label">⚠️ 常见过敏源</span>
+            {allergens.length > 0 ? (
+              <div className="allergen-tags">
+                {allergens.map((a, idx) => (
+                  <span key={idx} className="allergen-tag">{a}</span>
+                ))}
+              </div>
+            ) : (
+              <span className="booking-info-value" style={{ fontSize: 13 }}>无</span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderCapacityInfo = () => {
+    if (!bookingCheckResult || !bookingCheckResult.dailyUsage) return null;
+    const { dailyUsage } = bookingCheckResult;
+    const level = getUtilizationLevel(dailyUsage.utilization);
+
+    return (
+      <div className="capacity-bar-container">
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#5d4037', fontWeight: 500 }}>
+          <span>📊 {formatDate(dailyUsage.date)} 产能利用率</span>
+          {dailyUsage.festival && (
+            <span style={{ color: '#d32f2f', fontSize: 12 }}>🎊 {dailyUsage.festival.name}</span>
+          )}
+        </div>
+        <div className="capacity-bar">
+          <div
+            className={`capacity-bar-fill ${level}`}
+            style={{ width: `${Math.min(dailyUsage.utilization, 100)}%` }}
+          />
+        </div>
+        <div className="capacity-info">
+          <span>工时: {dailyUsage.usedHours}/{dailyUsage.capacityHours}h</span>
+          <span>订单: {dailyUsage.totalOrders}/{dailyUsage.capacityOrders}</span>
+          <span style={{ fontWeight: 600 }}>{dailyUsage.utilization.toFixed(1)}%</span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderValidationMessages = () => {
+    if (isCheckingBooking) {
+      return (
+        <div className="alert alert-info">
+          <span className="checking-spinner"></span>
+          正在校验订单信息...
+        </div>
+      );
+    }
+
+    if (!bookingCheckResult) return null;
+
+    return (
+      <>
+        {bookingCheckResult.errors && bookingCheckResult.errors.length > 0 && (
+          <div className="alert alert-danger">
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>❌ 无法预订：</div>
+            <ul style={{ marginLeft: 20 }}>
+              {bookingCheckResult.errors.map((err, idx) => (
+                <li key={idx}>{err}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {bookingCheckResult.warnings && bookingCheckResult.warnings.length > 0 && (
+          <div className="alert alert-warning">
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>⚠️ 温馨提示：</div>
+            <ul style={{ marginLeft: 20 }}>
+              {bookingCheckResult.warnings.map((warn, idx) => (
+                <li key={idx}>{warn}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </>
+    );
+  };
+
+  const renderAlternativeSlots = () => {
+    if (!bookingCheckResult || !bookingCheckResult.alternativeSlots || bookingCheckResult.alternativeSlots.length === 0) {
+      return null;
+    }
+    if (!(bookingCheckResult.errors && bookingCheckResult.errors.length > 0)) {
+      return null;
+    }
+
+    return (
+      <div className="suggestions-section">
+        <div className="suggestions-title">💡 推荐可选时段</div>
+        <div className="slot-cards">
+          {bookingCheckResult.alternativeSlots.map((slot, idx) => {
+            const level = getUtilizationLevel(slot.utilization);
+            return (
+              <div
+                key={idx}
+                className="slot-card"
+                onClick={() => handleSlotClick(slot)}
+              >
+                <div className="slot-card-date">{formatDate(slot.date)}</div>
+                <div className="slot-card-info">剩余工时: {slot.hoursLeft}h</div>
+                <div className="slot-card-info">剩余订单: {slot.ordersLeft}个</div>
+                <div className={`slot-card-utilization status-${level === 'low' ? '3' : level === 'medium' ? '2' : '6'}`}>
+                  利用率: {slot.utilization.toFixed(1)}%
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const renderSimilarCakes = () => {
+    if (!bookingCheckResult || !bookingCheckResult.similarCakes || bookingCheckResult.similarCakes.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="suggestions-section">
+        <div className="suggestions-title">🍰 同类相近款式推荐</div>
+        <div className="cake-cards">
+          {bookingCheckResult.similarCakes.map((cake, idx) => (
+            <div
+              key={idx}
+              className="similar-cake-card"
+              onClick={() => handleSimilarCakeClick(cake)}
+            >
+              <img
+                src={cake.image}
+                alt={cake.cakeName}
+                className="similar-cake-image"
+              />
+              <div className="similar-cake-info">
+                <div className="similar-cake-name">{cake.cakeName}</div>
+                <div className="similar-cake-price">¥{cake.price}</div>
+                {cake.suggestedDate && (
+                  <div className="similar-cake-date">推荐: {formatDate(cake.suggestedDate)}</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const canSubmit = () => {
+    if (!bookingCheckResult) return false;
+    if (bookingCheckResult.errors && bookingCheckResult.errors.length > 0) return false;
+    return true;
   };
 
   return (
@@ -248,6 +514,16 @@ export default function CakeCatalog() {
               </div>
             ) : (
               <>
+                {renderBookingInfoBar()}
+
+                {renderValidationMessages()}
+
+                {renderCapacityInfo()}
+
+                {renderAlternativeSlots()}
+
+                {renderSimilarCakes()}
+
                 <div className="form-group">
                   <label className="label">您的姓名 *</label>
                   <input
@@ -383,7 +659,11 @@ export default function CakeCatalog() {
                   <button className="btn btn-secondary" onClick={() => setShowOrderModal(false)}>
                     取消
                   </button>
-                  <button className="btn btn-primary btn-lg" onClick={submitOrder}>
+                  <button
+                    className="btn btn-primary btn-lg"
+                    onClick={submitOrder}
+                    disabled={!canSubmit()}
+                  >
                     确认预订
                   </button>
                 </div>
