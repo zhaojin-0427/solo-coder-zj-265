@@ -6,6 +6,9 @@ import ProductionBoard from './pages/ProductionBoard.jsx';
 import DeliveryManagement from './pages/DeliveryManagement.jsx';
 import Statistics from './pages/Statistics.jsx';
 import AdminManagement from './pages/AdminManagement.jsx';
+import EnterpriseGroupPurchase from './pages/EnterpriseGroupPurchase.jsx';
+import MemberSubscription from './pages/MemberSubscription.jsx';
+import ContractApproval from './pages/ContractApproval.jsx';
 import { api } from './api.js';
 
 export default function App() {
@@ -70,6 +73,9 @@ export default function App() {
             <NavLink to="/production" className="nav-link">生产看板</NavLink>
             <NavLink to="/delivery" className="nav-link">配送管理</NavLink>
             <NavLink to="/stats" className="nav-link">统计分析</NavLink>
+            <NavLink to="/subscription" className="nav-link">会员订阅</NavLink>
+            <NavLink to="/enterprise" className="nav-link">企业团购</NavLink>
+            <NavLink to="/approvals" className="nav-link">合同审批</NavLink>
             <NavLink to="/admin" className="nav-link">产能管理</NavLink>
             <button
               className="nav-link"
@@ -121,6 +127,9 @@ export default function App() {
           <Route path="/delivery" element={<DeliveryManagement />} />
           <Route path="/stats" element={<Statistics />} />
           <Route path="/admin" element={<AdminManagement />} />
+          <Route path="/subscription" element={<MemberSubscription />} />
+          <Route path="/enterprise" element={<EnterpriseGroupPurchase />} />
+          <Route path="/approvals" element={<ContractApproval />} />
         </Routes>
       </main>
     </div>

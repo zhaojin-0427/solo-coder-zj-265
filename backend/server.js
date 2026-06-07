@@ -6,8 +6,53 @@ const fs = require('fs');
 
 const {
   cakes, orders, orderStatuses, sweetnessLevels, stats, notifications, uuidv4,
-  sizeProductionTime, festivalSlots, dailyCapacity, bookingLogs
+  sizeProductionTime, festivalSlots, dailyCapacity, bookingLogs,
+  memberTiers, members, subscriptionPlans, subscriptionFulfillments,
+  enterpriseContracts, groupPurchaseSubOrders, approvals, approvalStatuses,
+  billingRecords
 } = require('./data');
+
+const createOrderFromSource = (orderData, sourceType, sourceId) => {
+  const cake = cakes.find(c => c.id === orderData.cakeId);
+  if (!cake) return null;
+  const newOrder = {
+    id: `ord-${Date.now()}-${uuidv4().slice(0, 6)}`,
+    customerName: orderData.customerName,
+    phone: orderData.phone,
+    cakeId: orderData.cakeId,
+    cakeName: cake.name,
+    size: orderData.size,
+    quantity: orderData.quantity || 1,
+    totalPrice: orderData.totalPrice || cake.price * (orderData.quantity || 1),
+    pickupType: orderData.pickupType || 'delivery',
+    pickupTypeLabel: orderData.pickupType === 'pickup' ? '自提' : '配送',
+    address: orderData.address || '',
+    deliveryTime: orderData.deliveryTime,
+    orderTime: new Date().toISOString().replace('T', ' ').slice(0, 16),
+    allergens: orderData.allergens || '无',
+    decorationNote: orderData.decorationNote || '',
+    status: 0,
+    statusLabel: orderStatuses[0],
+    productionPlan: null,
+    productPhoto: null,
+    customerNotified: false,
+    deliveryStatus: null,
+    estimatedArrival: null,
+    customerId: orderData.customerId || `cust-${uuidv4().slice(0, 8)}`,
+    sourceType,
+    sourceId
+  };
+  orders.unshift(newOrder);
+  notifications.unshift({
+    id: `notif-${Date.now()}-${uuidv4().slice(0, 6)}`,
+    orderId: newOrder.id,
+    type: 'new_order',
+    message: `新${sourceType === 'subscription' ? '订阅' : sourceType === 'group' ? '团购' : ''}订单: ${newOrder.cakeName} (${newOrder.size}) - ${newOrder.customerName}`,
+    time: newOrder.orderTime,
+    read: false
+  });
+  return newOrder;
+};
 
 const calcProductionHours = (cakeId, size, quantity = 1) => {
   const cake = cakes.find(c => c.id === cakeId);
@@ -863,14 +908,745 @@ app.post('/api/orders/reschedule', (req, res) => {
   res.json(order);
 });
 
+app.get('/api/members', (req, res) => {
+  const { status, search } = req.query;
+  let filtered = [...members];
+  if (status && status !== 'all') filtered = filtered.filter(m => m.status === status);
+  if (search) {
+    const s = search.toLowerCase();
+    filtered = filtered.filter(m => m.name.toLowerCase().includes(s) || m.phone.includes(s));
+  }
+  res.json(filtered);
+});
+
+app.get('/api/members/:id', (req, res) => {
+  const member = members.find(m => m.id === req.params.id);
+  if (!member) return res.status(404).json({ error: '会员不存在' });
+  const memberSubscriptions = subscriptionPlans.filter(s => s.memberId === member.id);
+  const memberFulfillments = subscriptionFulfillments.filter(f => f.memberId === member.id);
+  res.json({ ...member, subscriptions: memberSubscriptions, fulfillments: memberFulfillments });
+});
+
+app.post('/api/members', (req, res) => {
+  let tier = 'tier-normal';
+  let tierLabel = '普通会员';
+  for (let i = memberTiers.length - 1; i >= 0; i--) {
+    if ((req.body.totalSpent || 0) >= memberTiers[i].minSpend) {
+      tier = memberTiers[i].id;
+      tierLabel = memberTiers[i].name;
+      break;
+    }
+  }
+  const newMember = {
+    id: `mem-${Date.now()}`,
+    name: req.body.name,
+    phone: req.body.phone,
+    tier,
+    tierLabel,
+    totalSpent: req.body.totalSpent || 0,
+    joinDate: new Date().toISOString().slice(0, 10),
+    birthday: req.body.birthday || '',
+    email: req.body.email || '',
+    allergens: req.body.allergens || '无',
+    defaultAddress: req.body.defaultAddress || '',
+    points: req.body.totalSpent || 0,
+    status: 'active'
+  };
+  members.unshift(newMember);
+  res.status(201).json(newMember);
+});
+
+app.put('/api/members/:id', (req, res) => {
+  const member = members.find(m => m.id === req.params.id);
+  if (!member) return res.status(404).json({ error: '会员不存在' });
+  Object.assign(member, req.body);
+  if (req.body.totalSpent !== undefined) {
+    for (let i = memberTiers.length - 1; i >= 0; i--) {
+      if (member.totalSpent >= memberTiers[i].minSpend) {
+        member.tier = memberTiers[i].id;
+        member.tierLabel = memberTiers[i].name;
+        break;
+      }
+    }
+    member.points = member.totalSpent;
+  }
+  res.json(member);
+});
+
+app.get('/api/member-tiers', (req, res) => {
+  res.json(memberTiers);
+});
+
+app.get('/api/subscriptions', (req, res) => {
+  const { status, memberId } = req.query;
+  let filtered = [...subscriptionPlans];
+  if (status && status !== 'all') filtered = filtered.filter(s => s.status === status);
+  if (memberId) filtered = filtered.filter(s => s.memberId === memberId);
+  res.json(filtered);
+});
+
+app.get('/api/subscriptions/:id', (req, res) => {
+  const sub = subscriptionPlans.find(s => s.id === req.params.id);
+  if (!sub) return res.status(404).json({ error: '订阅计划不存在' });
+  const fulfillments = subscriptionFulfillments.filter(f => f.subscriptionId === sub.id);
+  res.json({ ...sub, fulfillments });
+});
+
+app.post('/api/subscriptions', (req, res) => {
+  const member = members.find(m => m.id === req.body.memberId);
+  const planTypeLabels = { monthly: '月度订阅(4期)', quarterly: '季度订阅(12期)', yearly: '年度订阅(52期)' };
+  const freqLabels = { weekly: '每周一次', biweekly: '每两周一次', monthly: '每月一次' };
+  const totalPeriods = { monthly: 4, quarterly: 12, yearly: 52 };
+  const basePrice = req.body.preferredCakes.reduce((sum, c) => {
+    const cake = cakes.find(ck => ck.id === c.cakeId);
+    return sum + (cake ? cake.price : 0);
+  }, 0) / Math.max(req.body.preferredCakes.length, 1);
+  const discount = member ? memberTiers.find(t => t.id === member.tier)?.discount || 1 : 1;
+  const unitPrice = Math.round(basePrice * discount * 0.9);
+  const tp = totalPeriods[req.body.planType] || 4;
+
+  const newSub = {
+    id: `sub-plan-${Date.now()}`,
+    memberId: req.body.memberId,
+    memberName: member ? member.name : req.body.memberName,
+    planType: req.body.planType || 'monthly',
+    planTypeLabel: planTypeLabels[req.body.planType] || planTypeLabels.monthly,
+    frequency: req.body.frequency || 'weekly',
+    frequencyLabel: freqLabels[req.body.frequency] || freqLabels.weekly,
+    preferredCakes: req.body.preferredCakes || [],
+    allergens: req.body.allergens || (member ? member.allergens : '无'),
+    sweetnessPreference: req.body.sweetnessPreference || 3,
+    defaultAddress: req.body.defaultAddress || (member ? member.defaultAddress : ''),
+    deliveryTimePref: req.body.deliveryTimePref || '15:00',
+    startDate: req.body.startDate,
+    endDate: req.body.endDate,
+    totalPeriods: tp,
+    fulfilledPeriods: 0,
+    skippedPeriods: [],
+    pausedPeriods: [],
+    isPaused: false,
+    pauseReason: '',
+    unitPrice,
+    totalPrice: unitPrice * tp,
+    paidAmount: req.body.paidAmount || 0,
+    status: 'active',
+    createdAt: new Date().toISOString().replace('T', ' ').slice(0, 16)
+  };
+  subscriptionPlans.unshift(newSub);
+
+  billingRecords.unshift({
+    id: `bill-${Date.now()}`,
+    type: 'subscription',
+    refId: newSub.id,
+    refNo: newSub.planTypeLabel,
+    customerName: newSub.memberName,
+    amount: newSub.totalPrice,
+    paymentMethod: req.body.paymentMethod || '微信支付',
+    paymentStatus: req.body.paidAmount > 0 ? 'paid' : 'pending',
+    paymentStatusLabel: req.body.paidAmount > 0 ? '已支付' : '待支付',
+    paidTime: req.body.paidAmount > 0 ? new Date().toISOString().replace('T', ' ').slice(0, 16) : '',
+    invoiceStatus: 'none',
+    invoiceStatusLabel: '无需开票',
+    period: new Date().toISOString().slice(0, 7),
+    createdAt: new Date().toISOString().replace('T', ' ').slice(0, 16)
+  });
+
+  if (member) {
+    member.totalSpent += newSub.totalPrice;
+    member.points += newSub.totalPrice;
+    for (let i = memberTiers.length - 1; i >= 0; i--) {
+      if (member.totalSpent >= memberTiers[i].minSpend) {
+        member.tier = memberTiers[i].id;
+        member.tierLabel = memberTiers[i].name;
+        break;
+      }
+    }
+  }
+
+  res.status(201).json(newSub);
+});
+
+app.put('/api/subscriptions/:id/pause', (req, res) => {
+  const sub = subscriptionPlans.find(s => s.id === req.params.id);
+  if (!sub) return res.status(404).json({ error: '订阅计划不存在' });
+  sub.isPaused = true;
+  sub.pauseReason = req.body.reason || '会员申请暂停';
+  sub.status = 'paused';
+  notifications.unshift({
+    id: `notif-${Date.now()}`,
+    type: 'subscription_update',
+    message: `订阅已暂停: ${sub.memberName} - ${sub.planTypeLabel}`,
+    time: new Date().toISOString().replace('T', ' ').slice(0, 16),
+    read: false
+  });
+  res.json(sub);
+});
+
+app.put('/api/subscriptions/:id/resume', (req, res) => {
+  const sub = subscriptionPlans.find(s => s.id === req.params.id);
+  if (!sub) return res.status(404).json({ error: '订阅计划不存在' });
+  sub.isPaused = false;
+  sub.pauseReason = '';
+  sub.status = 'active';
+  notifications.unshift({
+    id: `notif-${Date.now()}`,
+    type: 'subscription_update',
+    message: `订阅已恢复: ${sub.memberName} - ${sub.planTypeLabel}`,
+    time: new Date().toISOString().replace('T', ' ').slice(0, 16),
+    read: false
+  });
+  res.json(sub);
+});
+
+app.put('/api/subscriptions/:id/skip', (req, res) => {
+  const sub = subscriptionPlans.find(s => s.id === req.params.id);
+  if (!sub) return res.status(404).json({ error: '订阅计划不存在' });
+  const period = parseInt(req.body.period);
+  if (!sub.skippedPeriods.includes(period)) {
+    sub.skippedPeriods.push(period);
+  }
+  res.json(sub);
+});
+
+app.put('/api/subscriptions/:id/change-address', (req, res) => {
+  const sub = subscriptionPlans.find(s => s.id === req.params.id);
+  if (!sub) return res.status(404).json({ error: '订阅计划不存在' });
+  if (req.body.period) {
+    const ful = subscriptionFulfillments.find(
+      f => f.subscriptionId === sub.id && f.period === parseInt(req.body.period)
+    );
+    if (ful) {
+      ful.address = req.body.address;
+      const linkedOrder = orders.find(o => o.id === ful.orderId);
+      if (linkedOrder) linkedOrder.address = req.body.address;
+    }
+  } else {
+    sub.defaultAddress = req.body.address;
+  }
+  res.json(sub);
+});
+
+app.post('/api/subscriptions/:id/generate-orders', (req, res) => {
+  const sub = subscriptionPlans.find(s => s.id === req.params.id);
+  if (!sub) return res.status(404).json({ error: '订阅计划不存在' });
+  const member = members.find(m => m.id === sub.memberId);
+  const generatedOrders = [];
+  const startPeriod = sub.fulfilledPeriods + 1;
+  const periodsToGenerate = req.body.periods || 1;
+
+  for (let i = 0; i < periodsToGenerate; i++) {
+    const period = startPeriod + i;
+    if (period > sub.totalPeriods) break;
+    if (sub.skippedPeriods.includes(period) || sub.pausedPeriods.includes(period)) continue;
+
+    const prefCake = sub.preferredCakes[(period - 1) % sub.preferredCakes.length];
+    const cake = cakes.find(c => c.id === prefCake.cakeId);
+    if (!cake) continue;
+
+    let deliveryDate = new Date(sub.startDate);
+    if (sub.frequency === 'weekly') {
+      deliveryDate.setDate(deliveryDate.getDate() + (period - 1) * 7);
+    } else if (sub.frequency === 'biweekly') {
+      deliveryDate.setDate(deliveryDate.getDate() + (period - 1) * 14);
+    } else {
+      deliveryDate.setMonth(deliveryDate.getMonth() + (period - 1));
+    }
+    const dateStr = deliveryDate.toISOString().slice(0, 10);
+    const deliveryTime = `${dateStr} ${sub.deliveryTimePref}`;
+
+    const orderData = {
+      customerName: sub.memberName,
+      phone: member ? member.phone : '',
+      cakeId: prefCake.cakeId,
+      size: prefCake.size,
+      quantity: 1,
+      totalPrice: sub.unitPrice,
+      pickupType: sub.defaultAddress ? 'delivery' : 'pickup',
+      address: sub.defaultAddress,
+      deliveryTime,
+      allergens: sub.allergens,
+      decorationNote: `订阅第${period}期 甜度:${sweetnessLevels[sub.sweetnessPreference - 1] || ''}`,
+      customerId: sub.memberId
+    };
+
+    const bookingCheckResp = { valid: true };
+    try {
+      const fakeReq = { body: { cakeId: prefCake.cakeId, size: prefCake.size, quantity: 1, deliveryTime } };
+      const c = cakes.find(ck => ck.id === prefCake.cakeId);
+      const now = new Date();
+      const delivery = new Date(deliveryTime.replace(' ', 'T'));
+      const diffHours = (delivery - now) / (1000 * 60 * 60);
+      if (diffHours < (c?.advanceBookingHours || 24)) {
+        bookingCheckResp.valid = false;
+      }
+    } catch (e) {}
+
+    if (bookingCheckResp.valid) {
+      const newOrder = createOrderFromSource(orderData, 'subscription', sub.id);
+      if (newOrder) {
+        generatedOrders.push(newOrder);
+        const fulfillment = {
+          id: `sub-ful-${Date.now()}-${i}`,
+          subscriptionId: sub.id,
+          memberId: sub.memberId,
+          memberName: sub.memberName,
+          period,
+          cakeId: prefCake.cakeId,
+          cakeName: cake.name,
+          size: prefCake.size,
+          quantity: 1,
+          unitPrice: sub.unitPrice,
+          address: sub.defaultAddress,
+          deliveryTime,
+          orderId: newOrder.id,
+          status: 'pending',
+          statusLabel: '待配送',
+          note: ''
+        };
+        subscriptionFulfillments.push(fulfillment);
+        sub.fulfilledPeriods = period;
+      }
+    }
+  }
+  res.json({ generated: generatedOrders.length, orders: generatedOrders });
+});
+
+app.get('/api/subscription-fulfillments', (req, res) => {
+  const { subscriptionId, status } = req.query;
+  let filtered = [...subscriptionFulfillments];
+  if (subscriptionId) filtered = filtered.filter(f => f.subscriptionId === subscriptionId);
+  if (status && status !== 'all') filtered = filtered.filter(f => f.status === status);
+  res.json(filtered);
+});
+
+app.put('/api/subscription-fulfillments/:id/status', (req, res) => {
+  const ful = subscriptionFulfillments.find(f => f.id === req.params.id);
+  if (!ful) return res.status(404).json({ error: '履约记录不存在' });
+  ful.status = req.body.status;
+  const statusLabels = { pending: '待配送', fulfilled: '已履约', skipped: '已跳过', cancelled: '已取消' };
+  ful.statusLabel = statusLabels[req.body.status] || ful.statusLabel;
+  res.json(ful);
+});
+
+app.get('/api/enterprise-contracts', (req, res) => {
+  const { status, search } = req.query;
+  let filtered = [...enterpriseContracts];
+  if (status && status !== 'all') filtered = filtered.filter(c => c.status === status);
+  if (search) {
+    const s = search.toLowerCase();
+    filtered = filtered.filter(c => c.companyName.toLowerCase().includes(s) || c.contractNo.toLowerCase().includes(s));
+  }
+  res.json(filtered);
+});
+
+app.get('/api/enterprise-contracts/:id', (req, res) => {
+  const contract = enterpriseContracts.find(c => c.id === req.params.id);
+  if (!contract) return res.status(404).json({ error: '企业合同不存在' });
+  const subOrders = groupPurchaseSubOrders.filter(o => o.contractId === contract.id);
+  res.json({ ...contract, subOrders });
+});
+
+app.post('/api/enterprise-contracts', (req, res) => {
+  const newContract = {
+    id: `ent-ctr-${Date.now()}`,
+    companyName: req.body.companyName,
+    contactPerson: req.body.contactPerson,
+    contactPhone: req.body.contactPhone,
+    contactEmail: req.body.contactEmail || '',
+    contractNo: req.body.contractNo || `CTR-${Date.now()}`,
+    totalBudget: parseFloat(req.body.totalBudget) || 0,
+    usedBudget: 0,
+    remainingBudget: parseFloat(req.body.totalBudget) || 0,
+    invoiceInfo: req.body.invoiceInfo || {},
+    departments: req.body.departments || [],
+    startDate: req.body.startDate,
+    endDate: req.body.endDate,
+    status: 'pending',
+    statusLabel: '待审批',
+    approvalStatus: 0,
+    approver: '',
+    approvalTime: '',
+    approvalRemark: '',
+    createdAt: new Date().toISOString().replace('T', ' ').slice(0, 16),
+    createdBy: req.body.createdBy || req.body.contactPerson
+  };
+  enterpriseContracts.unshift(newContract);
+
+  const approval = {
+    id: `apr-${Date.now()}`,
+    refType: 'enterprise_contract',
+    refId: newContract.id,
+    title: `${newContract.companyName}团购合同审批`,
+    applicant: newContract.createdBy,
+    applicantPhone: newContract.contactPhone,
+    amount: newContract.totalBudget,
+    submitTime: newContract.createdAt,
+    currentApprover: '财务李经理',
+    approverRole: '财务审核',
+    status: 'pending',
+    statusLabel: '待审批',
+    approvalTime: '',
+    approvalRemark: '',
+    flowSteps: [
+      { step: 1, approver: '财务李经理', role: '财务审核', status: 'pending', time: '', remark: '' },
+      { step: 2, approver: '运营王总监', role: '运营审核', status: 'waiting', time: '', remark: '' },
+      { step: 3, approver: '张总', role: '总经理审批', status: 'waiting', time: '', remark: '' }
+    ]
+  };
+  approvals.unshift(approval);
+
+  notifications.unshift({
+    id: `notif-${Date.now()}`,
+    type: 'approval_request',
+    message: `新合同待审批: ${newContract.companyName} - 金额¥${newContract.totalBudget}`,
+    time: newContract.createdAt,
+    read: false
+  });
+
+  res.status(201).json({ contract: newContract, approval });
+});
+
+app.get('/api/group-purchase-orders', (req, res) => {
+  const { contractId, status, departmentId } = req.query;
+  let filtered = [...groupPurchaseSubOrders];
+  if (contractId) filtered = filtered.filter(o => o.contractId === contractId);
+  if (status && status !== 'all') filtered = filtered.filter(o => o.status === status);
+  if (departmentId) filtered = filtered.filter(o => o.departmentId === departmentId);
+  res.json(filtered);
+});
+
+app.get('/api/group-purchase-orders/:id', (req, res) => {
+  const order = groupPurchaseSubOrders.find(o => o.id === req.params.id);
+  if (!order) return res.status(404).json({ error: '团购子订单不存在' });
+  const linkedOrders = orders.filter(o => order.orderIds.includes(o.id));
+  res.json({ ...order, linkedOrders });
+});
+
+app.post('/api/group-purchase-orders', (req, res) => {
+  const contract = enterpriseContracts.find(c => c.id === req.body.contractId);
+  if (!contract) return res.status(404).json({ error: '合同不存在' });
+  if (contract.status !== 'approved') return res.status(400).json({ error: '合同未审批通过，无法创建团购订单' });
+
+  const cake = cakes.find(c => c.id === req.body.cakeId);
+  if (!cake) return res.status(404).json({ error: '蛋糕不存在' });
+
+  const recipients = req.body.recipients || [];
+  const totalPrice = req.body.unitPrice * recipients.length;
+
+  if (contract.remainingBudget < totalPrice) {
+    return res.status(400).json({ error: '合同剩余预算不足' });
+  }
+
+  const generatedOrderIds = [];
+  const generatedOrders = [];
+
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
+    const order = createOrderFromSource({
+      customerName: r.name,
+      phone: r.phone,
+      cakeId: req.body.cakeId,
+      size: req.body.size,
+      quantity: 1,
+      totalPrice: req.body.unitPrice,
+      pickupType: 'delivery',
+      address: r.address,
+      deliveryTime: req.body.deliveryTime,
+      allergens: '无',
+      decorationNote: `企业团购 - ${contract.companyName} - ${req.body.departmentName}`,
+      customerId: `ent-${contract.id}`
+    }, 'group', req.body.contractId);
+    if (order) {
+      generatedOrderIds.push(order.id);
+      generatedOrders.push(order);
+    }
+  }
+
+  const subOrder = {
+    id: `gp-ord-${Date.now()}`,
+    contractId: contract.id,
+    companyName: contract.companyName,
+    departmentId: req.body.departmentId,
+    departmentName: req.body.departmentName,
+    recipients,
+    cakeId: req.body.cakeId,
+    cakeName: cake.name,
+    size: req.body.size,
+    quantity: recipients.length,
+    unitPrice: req.body.unitPrice,
+    totalPrice,
+    batchNo: req.body.batchNo || `batch-${Date.now()}`,
+    deliveryBatch: req.body.deliveryBatch || 1,
+    totalBatches: req.body.totalBatches || 1,
+    deliveryTime: req.body.deliveryTime,
+    deliveryStatus: 'pending',
+    deliveryStatusLabel: '待配送',
+    orderIds: generatedOrderIds,
+    status: 'pending',
+    createdAt: new Date().toISOString().replace('T', ' ').slice(0, 16)
+  };
+  groupPurchaseSubOrders.unshift(subOrder);
+
+  contract.usedBudget += totalPrice;
+  contract.remainingBudget -= totalPrice;
+
+  notifications.unshift({
+    id: `notif-${Date.now()}`,
+    type: 'group_order',
+    message: `企业团购订单已生成: ${contract.companyName} - ${subOrder.departmentName} ${recipients.length}个`,
+    time: new Date().toISOString().replace('T', ' ').slice(0, 16),
+    read: false
+  });
+
+  res.status(201).json({ subOrder, generatedOrders });
+});
+
+app.put('/api/group-purchase-orders/:id/delivery-status', (req, res) => {
+  const subOrder = groupPurchaseSubOrders.find(o => o.id === req.params.id);
+  if (!subOrder) return res.status(404).json({ error: '团购子订单不存在' });
+
+  subOrder.deliveryStatus = req.body.status;
+  const statusLabels = { pending: '待配送', on_the_way: '配送中', delivered: '已送达', cancelled: '已取消' };
+  subOrder.deliveryStatusLabel = statusLabels[req.body.status] || subOrder.deliveryStatusLabel;
+
+  if (req.body.status === 'delivered') {
+    subOrder.status = 'completed';
+    subOrder.orderIds.forEach(oid => {
+      const order = orders.find(o => o.id === oid);
+      if (order) {
+        order.status = 5;
+        order.statusLabel = orderStatuses[5];
+        order.actualDeliveryTime = new Date().toISOString().replace('T', ' ').slice(0, 16);
+      }
+    });
+  } else if (req.body.status === 'on_the_way') {
+    subOrder.orderIds.forEach(oid => {
+      const order = orders.find(o => o.id === oid);
+      if (order) {
+        order.status = 4;
+        order.statusLabel = orderStatuses[4];
+        order.deliveryStatus = {
+          status: 'on_the_way',
+          statusLabel: '配送中',
+          driverName: req.body.driverName || '企业配送',
+          driverPhone: req.body.driverPhone || '',
+          currentLocation: '已出库',
+          startTime: new Date().toISOString().replace('T', ' ').slice(0, 16),
+          updates: [{ time: new Date().toISOString().replace('T', ' ').slice(0, 16), status: '企业批量配送已出库', location: '烘焙工作室' }]
+        };
+      }
+    });
+  }
+
+  notifications.unshift({
+    id: `notif-${Date.now()}`,
+    type: 'delivery_update',
+    message: `企业团购配送状态变更: ${subOrder.companyName} ${subOrder.departmentName} - ${subOrder.deliveryStatusLabel}`,
+    time: new Date().toISOString().replace('T', ' ').slice(0, 16),
+    read: false
+  });
+
+  res.json(subOrder);
+});
+
+app.get('/api/approvals', (req, res) => {
+  const { status, refType } = req.query;
+  let filtered = [...approvals];
+  if (status && status !== 'all') filtered = filtered.filter(a => a.status === status);
+  if (refType) filtered = filtered.filter(a => a.refType === refType);
+  res.json(filtered);
+});
+
+app.get('/api/approvals/:id', (req, res) => {
+  const approval = approvals.find(a => a.id === req.params.id);
+  if (!approval) return res.status(404).json({ error: '审批不存在' });
+  res.json(approval);
+});
+
+app.put('/api/approvals/:id/approve', (req, res) => {
+  const approval = approvals.find(a => a.id === req.params.id);
+  if (!approval) return res.status(404).json({ error: '审批不存在' });
+
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 16);
+  for (let i = 0; i < approval.flowSteps.length; i++) {
+    if (approval.flowSteps[i].status === 'pending') {
+      approval.flowSteps[i].status = 'approved';
+      approval.flowSteps[i].time = now;
+      approval.flowSteps[i].remark = req.body.remark || '审核通过';
+
+      if (i < approval.flowSteps.length - 1) {
+        approval.flowSteps[i + 1].status = 'pending';
+        approval.currentApprover = approval.flowSteps[i + 1].approver;
+        approval.approverRole = approval.flowSteps[i + 1].role;
+        approval.status = 'in_progress';
+        approval.statusLabel = '审批中';
+      } else {
+        approval.status = 'approved';
+        approval.statusLabel = '已通过';
+        approval.approvalTime = now;
+        approval.approvalRemark = req.body.remark || '审批通过';
+
+        if (approval.refType === 'enterprise_contract') {
+          const contract = enterpriseContracts.find(c => c.id === approval.refId);
+          if (contract) {
+            contract.status = 'approved';
+            contract.statusLabel = '已通过';
+            contract.approvalStatus = 2;
+            contract.approver = approval.flowSteps[i].approver;
+            contract.approvalTime = now;
+            contract.approvalRemark = req.body.remark || '审批通过';
+
+            billingRecords.unshift({
+              id: `bill-${Date.now()}`,
+              type: 'enterprise',
+              refId: contract.id,
+              refNo: contract.contractNo,
+              customerName: contract.companyName,
+              amount: contract.totalBudget,
+              paymentMethod: '对公转账',
+              paymentStatus: 'pending',
+              paymentStatusLabel: '待支付',
+              paidTime: '',
+              invoiceStatus: 'pending',
+              invoiceStatusLabel: '待开票',
+              period: new Date().toISOString().slice(0, 7),
+              createdAt: now
+            });
+          }
+        }
+      }
+      break;
+    }
+  }
+
+  notifications.unshift({
+    id: `notif-${Date.now()}`,
+    type: 'approval_update',
+    message: `审批${approval.status === 'approved' ? '已通过' : '进度更新'}: ${approval.title}`,
+    time: now,
+    read: false
+  });
+
+  res.json(approval);
+});
+
+app.put('/api/approvals/:id/reject', (req, res) => {
+  const approval = approvals.find(a => a.id === req.params.id);
+  if (!approval) return res.status(404).json({ error: '审批不存在' });
+
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 16);
+  for (let i = 0; i < approval.flowSteps.length; i++) {
+    if (approval.flowSteps[i].status === 'pending') {
+      approval.flowSteps[i].status = 'rejected';
+      approval.flowSteps[i].time = now;
+      approval.flowSteps[i].remark = req.body.remark || '审核驳回';
+      break;
+    }
+  }
+  approval.status = 'rejected';
+  approval.statusLabel = '已驳回';
+  approval.approvalTime = now;
+  approval.approvalRemark = req.body.remark || '审批驳回';
+
+  if (approval.refType === 'enterprise_contract') {
+    const contract = enterpriseContracts.find(c => c.id === approval.refId);
+    if (contract) {
+      contract.status = 'rejected';
+      contract.statusLabel = '已驳回';
+      contract.approvalStatus = 3;
+      contract.approvalRemark = req.body.remark || '审批驳回';
+    }
+  }
+
+  notifications.unshift({
+    id: `notif-${Date.now()}`,
+    type: 'approval_update',
+    message: `审批已驳回: ${approval.title}`,
+    time: now,
+    read: false
+  });
+
+  res.json(approval);
+});
+
+app.get('/api/billing', (req, res) => {
+  const { type, period, paymentStatus } = req.query;
+  let filtered = [...billingRecords];
+  if (type && type !== 'all') filtered = filtered.filter(b => b.type === type);
+  if (period) filtered = filtered.filter(b => b.period === period);
+  if (paymentStatus && paymentStatus !== 'all') filtered = filtered.filter(b => b.paymentStatus === paymentStatus);
+
+  const totalAmount = filtered.reduce((s, b) => s + b.amount, 0);
+  const paidAmount = filtered.filter(b => b.paymentStatus === 'paid').reduce((s, b) => s + b.amount, 0);
+  const pendingAmount = filtered.filter(b => b.paymentStatus === 'pending').reduce((s, b) => s + b.amount, 0);
+
+  const byType = {};
+  billingRecords.forEach(b => {
+    if (!byType[b.type]) byType[b.type] = 0;
+    byType[b.type] += b.amount;
+  });
+
+  const byPeriod = {};
+  billingRecords.forEach(b => {
+    if (!byPeriod[b.period]) byPeriod[b.period] = { period: b.period, total: 0, paid: 0, pending: 0 };
+    byPeriod[b.period].total += b.amount;
+    if (b.paymentStatus === 'paid') byPeriod[b.period].paid += b.amount;
+    else byPeriod[b.period].pending += b.amount;
+  });
+
+  res.json({
+    records: filtered,
+    summary: {
+      totalAmount,
+      paidAmount,
+      pendingAmount,
+      recordCount: filtered.length
+    },
+    byType: Object.entries(byType).map(([type, amount]) => ({
+      type,
+      typeLabel: type === 'subscription' ? '会员订阅' : type === 'enterprise' ? '企业团购' : '零售订单',
+      amount
+    })),
+    byPeriod: Object.values(byPeriod).sort((a, b) => a.period.localeCompare(b.period))
+  });
+});
+
+app.put('/api/billing/:id/payment', (req, res) => {
+  const bill = billingRecords.find(b => b.id === req.params.id);
+  if (!bill) return res.status(404).json({ error: '账单不存在' });
+  bill.paymentStatus = req.body.status || 'paid';
+  bill.paymentStatusLabel = bill.paymentStatus === 'paid' ? '已支付' : bill.paymentStatus === 'pending' ? '待支付' : '已取消';
+  if (bill.paymentStatus === 'paid') {
+    bill.paidTime = new Date().toISOString().replace('T', ' ').slice(0, 16);
+  }
+  res.json(bill);
+});
+
+app.put('/api/billing/:id/invoice', (req, res) => {
+  const bill = billingRecords.find(b => b.id === req.params.id);
+  if (!bill) return res.status(404).json({ error: '账单不存在' });
+  bill.invoiceStatus = req.body.status || 'issued';
+  const invLabels = { none: '无需开票', pending: '待开票', issued: '已开票', cancelled: '已作废' };
+  bill.invoiceStatusLabel = invLabels[bill.invoiceStatus] || bill.invoiceStatusLabel;
+  if (req.body.invoiceNo) bill.invoiceNo = req.body.invoiceNo;
+  res.json(bill);
+});
+
+app.get('/api/approval-statuses', (req, res) => {
+  res.json(approvalStatuses);
+});
+
 app.listen(PORT, () => {
   console.log(`蛋糕预订系统后端服务已启动: http://localhost:${PORT}`);
   console.log(`API 文档:`);
   console.log(`  蛋糕列表:      GET    /api/cakes`);
-  console.log(`  蛋糕详情:      GET    /api/cakes/:id`);
   console.log(`  订单列表:      GET    /api/orders`);
-  console.log(`  创建订单:      POST   /api/orders`);
+  console.log(`  会员管理:      GET    /api/members`);
+  console.log(`  订阅管理:      GET    /api/subscriptions`);
+  console.log(`  企业合同:      GET    /api/enterprise-contracts`);
+  console.log(`  团购订单:      GET    /api/group-purchase-orders`);
+  console.log(`  审批流:        GET    /api/approvals`);
+  console.log(`  账单统计:      GET    /api/billing`);
   console.log(`  生产看板:      GET    /api/production-board`);
   console.log(`  统计数据:      GET    /api/stats`);
-  console.log(`  通知列表:      GET    /api/notifications`);
 });

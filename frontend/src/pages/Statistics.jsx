@@ -11,18 +11,39 @@ const COLORS = ['#d4a574', '#b8860b', '#d32f2f', '#388e3c', '#1976d2', '#7b1fa2'
 
 export default function Statistics() {
   const [stats, setStats] = useState(null);
+  const [billing, setBilling] = useState(null);
+  const [billingFilter, setBillingFilter] = useState('all');
   const location = useLocation();
 
   useEffect(() => {
     loadStats();
-    const interval = setInterval(loadStats, 15000);
+    loadBilling();
+    const interval = setInterval(() => {
+      loadStats();
+      loadBilling();
+    }, 15000);
     return () => clearInterval(interval);
   }, [location.pathname]);
+
+  useEffect(() => {
+    loadBilling();
+  }, [billingFilter]);
 
   const loadStats = async () => {
     try {
       const res = await api.getStats();
       setStats(res.data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const loadBilling = async () => {
+    try {
+      const params = {};
+      if (billingFilter !== 'all') params.type = billingFilter;
+      const res = await api.getBilling(params);
+      setBilling(res.data);
     } catch (e) {
       console.error(e);
     }
@@ -105,6 +126,26 @@ export default function Statistics() {
             {stats.peakHours.reduce((max, h) => h.count > max.count ? h : max, stats.peakHours[0]).hour}
           </div>
           <div className="stat-label">最高峰时段</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon">💰</div>
+          <div className="stat-value">¥{(billing?.summary?.totalAmount || 0).toLocaleString()}</div>
+          <div className="stat-label">总营收</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon">✅</div>
+          <div className="stat-value success">¥{(billing?.summary?.paidAmount || 0).toLocaleString()}</div>
+          <div className="stat-label">已收款</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon">⏳</div>
+          <div className="stat-value highlight">¥{(billing?.summary?.pendingAmount || 0).toLocaleString()}</div>
+          <div className="stat-label">待收款</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon">📄</div>
+          <div className="stat-value">{billing?.summary?.recordCount || 0}</div>
+          <div className="stat-label">账单总数</div>
         </div>
       </div>
 
@@ -535,6 +576,203 @@ export default function Statistics() {
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div>
+        <h2 className="page-title" style={{ fontSize: 24, marginTop: 20 }}>💰 账单分析</h2>
+
+        <div className="card">
+          <div className="filter-bar">
+            <div className="tabs" style={{ marginBottom: 0 }}>
+              <button
+                className={`tab ${billingFilter === 'all' ? 'active' : ''}`}
+                onClick={() => setBillingFilter('all')}
+              >全部账单</button>
+              <button
+                className={`tab ${billingFilter === 'subscription' ? 'active' : ''}`}
+                onClick={() => setBillingFilter('subscription')}
+              >会员订阅</button>
+              <button
+                className={`tab ${billingFilter === 'enterprise' ? 'active' : ''}`}
+                onClick={() => setBillingFilter('enterprise')}
+              >企业团购</button>
+              <button
+                className={`tab ${billingFilter === 'retail' ? 'active' : ''}`}
+                onClick={() => setBillingFilter('retail')}
+              >零售订单</button>
+            </div>
+          </div>
+        </div>
+
+        <div className="charts-row">
+          <div className="chart-card">
+            <div className="chart-title">💹 营收来源分布</div>
+            {billing?.byType && billing.byType.length > 0 ? (
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie
+                    data={billing.byType}
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={100}
+                    dataKey="amount"
+                    nameKey="typeLabel"
+                    paddingAngle={2}
+                    label={({ typeLabel, amount, percent }) =>
+                      `${typeLabel}: ¥${amount.toLocaleString()} (${(percent * 100).toFixed(1)}%)`
+                    }
+                    labelLine={{ stroke: '#8b7355' }}
+                  >
+                    {billing.byType.map((_, index) => (
+                      <Cell key={`billing-type-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      background: 'white',
+                      border: '1px solid #e0d4c3',
+                      borderRadius: 10,
+                      padding: 12
+                    }}
+                    formatter={(value) => [`¥${value.toLocaleString()}`, '金额']}
+                  />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="empty-state" style={{ height: 280 }}>
+                <div className="empty-state-text">暂无账单数据</div>
+              </div>
+            )}
+          </div>
+
+          <div className="chart-card">
+            <div className="chart-title">📈 月度营收趋势</div>
+            {billing?.byPeriod && billing.byPeriod.length > 0 ? (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={billing.byPeriod}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0e6d8" />
+                  <XAxis dataKey="period" stroke="#8b7355" />
+                  <YAxis stroke="#8b7355" />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'white',
+                      border: '1px solid #e0d4c3',
+                      borderRadius: 10,
+                      padding: 12
+                    }}
+                    formatter={(value) => [`¥${value.toLocaleString()}`, '']}
+                  />
+                  <Legend />
+                  <Bar dataKey="total" name="总金额" fill="#d4a574" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="paid" name="已收款" fill="#388e3c" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="pending" name="待收款" fill="#f57c00" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="empty-state" style={{ height: 280 }}>
+                <div className="empty-state-text">暂无月度数据</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="chart-title">📋 账单明细</div>
+          {billing?.records && billing.records.length > 0 ? (
+            <table className="table" style={{ marginTop: 10 }}>
+              <thead>
+                <tr>
+                  <th>账单编号</th>
+                  <th>类型</th>
+                  <th>客户/企业</th>
+                  <th>关联单号</th>
+                  <th style={{ textAlign: 'right' }}>金额</th>
+                  <th>支付方式</th>
+                  <th>支付状态</th>
+                  <th>开票状态</th>
+                  <th>所属周期</th>
+                  <th>创建时间</th>
+                  <th style={{ width: 140 }}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {billing.records.map(bill => (
+                  <tr key={bill.id}>
+                    <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{bill.id}</td>
+                    <td>
+                      <span className={`badge ${bill.type === 'subscription' ? 'badge-delivery' : bill.type === 'enterprise' ? 'badge-pickup' : ''}`} style={{
+                        background: bill.type === 'subscription' ? '#e3f2fd' : bill.type === 'enterprise' ? '#fff3e0' : '#f3e5f5',
+                        color: bill.type === 'subscription' ? '#1565c0' : bill.type === 'enterprise' ? '#e65100' : '#6a1b9a'
+                      }}>
+                        {bill.type === 'subscription' ? '会员订阅' : bill.type === 'enterprise' ? '企业团购' : '零售订单'}
+                      </span>
+                    </td>
+                    <td>{bill.customerName}</td>
+                    <td style={{ fontFamily: 'monospace', fontSize: 12, color: '#8b7355' }}>{bill.refNo}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 600, color: '#d32f2f' }}>
+                      ¥{bill.amount.toLocaleString()}
+                    </td>
+                    <td>{bill.paymentMethod}</td>
+                    <td>
+                      <span className="badge" style={{
+                        background: bill.paymentStatus === 'paid' ? '#e8f5e9' : '#fff3e0',
+                        color: bill.paymentStatus === 'paid' ? '#2e7d32' : '#e65100'
+                      }}>
+                        {bill.paymentStatusLabel}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="badge" style={{
+                        background: bill.invoiceStatus === 'issued' ? '#e8f5e9' : bill.invoiceStatus === 'pending' ? '#fff3e0' : '#f5f5f5',
+                        color: bill.invoiceStatus === 'issued' ? '#2e7d32' : bill.invoiceStatus === 'pending' ? '#e65100' : '#616161'
+                      }}>
+                        {bill.invoiceStatusLabel}
+                        {bill.invoiceNo && <span style={{ marginLeft: 4, fontSize: 11 }}>({bill.invoiceNo})</span>}
+                      </span>
+                    </td>
+                    <td>{bill.period}</td>
+                    <td style={{ fontSize: 13, color: '#8b7355' }}>{bill.createdAt}</td>
+                    <td>
+                      <div className="actions-bar">
+                        {bill.paymentStatus !== 'paid' && (
+                          <button
+                            className="btn btn-sm btn-success"
+                            onClick={async () => {
+                              try {
+                                await api.updateBillingPayment(bill.id, 'paid');
+                                loadBilling();
+                              } catch (e) { console.error(e); }
+                            }}
+                          >确认收款</button>
+                        )}
+                        {bill.invoiceStatus === 'pending' && (
+                          <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={async () => {
+                              try {
+                                await api.updateBillingInvoice(bill.id, {
+                                  status: 'issued',
+                                  invoiceNo: `INV-${Date.now().toString().slice(-8)}`
+                                });
+                                loadBilling();
+                              } catch (e) { console.error(e); }
+                            }}
+                          >开具发票</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty-state" style={{ padding: '40px 20px' }}>
+              <div className="empty-state-icon">💰</div>
+              <div className="empty-state-text">暂无账单记录</div>
+            </div>
+          )}
         </div>
       </div>
     </div>
