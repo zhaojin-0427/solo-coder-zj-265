@@ -699,23 +699,47 @@ app.post('/api/booking/check', (req, res) => {
   }
   const similarCakes = [];
   if (errors.length > 0) {
+    const addCakeIfAvail = (c, days = 14) => {
+      if (c.id === cakeId) return false;
+      if (similarCakes.find(s => s.cakeId === c.id)) return false;
+      const s = getAvailableSlots(c.id, size, quantity, pickupType, deliveryTime, days);
+      const firstAvail = s.find(x => x.available);
+      if (firstAvail) {
+        similarCakes.push({
+          cakeId: c.id,
+          cakeName: c.name,
+          price: c.price,
+          image: c.image,
+          baseProductionHours: c.baseProductionHours,
+          advanceBookingHours: c.advanceBookingHours,
+          suggestedDate: firstAvail.date
+        });
+        return true;
+      }
+      return false;
+    };
+
     cakes.forEach(c => {
-      if (c.id !== cakeId && c.category === cake.category) {
-        const s = getAvailableSlots(c.id, size, quantity, pickupType, deliveryTime, 3);
-        const firstAvail = s.find(x => x.available);
-        if (firstAvail) {
-          similarCakes.push({
-            cakeId: c.id,
-            cakeName: c.name,
-            price: c.price,
-            image: c.image,
-            baseProductionHours: c.baseProductionHours,
-            advanceBookingHours: c.advanceBookingHours,
-            suggestedDate: firstAvail.date
-          });
+      if (c.category === cake.category) addCakeIfAvail(c, 14);
+    });
+
+    if (similarCakes.length < 3) {
+      const minPrice = cake.price * 0.7;
+      const maxPrice = cake.price * 1.3;
+      cakes.forEach(c => {
+        if (c.category !== cake.category && c.price >= minPrice && c.price <= maxPrice) {
+          addCakeIfAvail(c, 14);
+        }
+      });
+    }
+
+    if (similarCakes.length < 3) {
+      for (const c of cakes) {
+        if (addCakeIfAvail(c, 30)) {
+          if (similarCakes.length >= 3) break;
         }
       }
-    });
+    }
   }
   const alternativeSlots = getAvailableSlots(cakeId, size, quantity, pickupType, deliveryTime, 10)
     .filter(s => s.available)
@@ -787,9 +811,15 @@ app.get('/api/production-board/sorted', (req, res) => {
       const delivery = new Date((o.deliveryTime || '').replace(' ', 'T'));
       const hoursToDelivery = (delivery - now) / (1000 * 60 * 60);
       let urgency = 'normal';
-      if (hoursToDelivery < 6) urgency = 'critical';
-      else if (hoursToDelivery < 24) urgency = 'urgent';
-      else if (hoursToDelivery < 48) urgency = 'soon';
+      if (hoursToDelivery < 0) {
+        urgency = 'overdue';
+      } else if (hoursToDelivery < 6) {
+        urgency = 'critical';
+      } else if (hoursToDelivery < 24) {
+        urgency = 'urgent';
+      } else if (hoursToDelivery < 48) {
+        urgency = 'soon';
+      }
       return {
         ...o,
         productionHours: hours,
@@ -798,7 +828,7 @@ app.get('/api/production-board/sorted', (req, res) => {
       };
     })
     .sort((a, b) => {
-      const urgencyWeight = { critical: 0, urgent: 1, soon: 2, normal: 3 };
+      const urgencyWeight = { critical: 0, urgent: 1, soon: 2, normal: 3, overdue: 4 };
       if (urgencyWeight[a.urgency] !== urgencyWeight[b.urgency]) {
         return urgencyWeight[a.urgency] - urgencyWeight[b.urgency];
       }

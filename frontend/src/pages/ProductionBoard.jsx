@@ -8,14 +8,15 @@ const STATUS_GROUPS = [
   { key: 'delivering', label: '配送中', statuses: [4] }
 ];
 
-const URGENCY_ORDER = { critical: 0, urgent: 1, soon: 2, normal: 3 };
+const URGENCY_ORDER = { critical: 0, urgent: 1, soon: 2, normal: 3, overdue: 4 };
 
 const URGENCY_STATS = [
   { key: 'all', label: '全部', icon: '📋', color: '#d4a574', bgColor: '#fdf5ea', borderColor: '#d4a574' },
   { key: 'critical', label: '紧急订单', icon: '🔥', color: '#c62828', bgColor: '#ffebee', borderColor: '#e53935' },
   { key: 'urgent', label: '临期订单', icon: '⚠️', color: '#e65100', bgColor: '#fff3e0', borderColor: '#fb8c00' },
   { key: 'soon', label: '即将到来', icon: '📅', color: '#f57f17', bgColor: '#fff8e1', borderColor: '#ffb300' },
-  { key: 'normal', label: '正常订单', icon: '✅', color: '#2e7d32', bgColor: '#e8f5e9', borderColor: '#66bb6a' }
+  { key: 'normal', label: '正常订单', icon: '✅', color: '#2e7d32', bgColor: '#e8f5e9', borderColor: '#66bb6a' },
+  { key: 'overdue', label: '已超时', icon: '⏰', color: '#880e4f', bgColor: '#fce4ec', borderColor: '#ad1457' }
 ];
 
 function getUrgencyStyle(urgency) {
@@ -34,6 +35,13 @@ function getUrgencyStyle(urgency) {
     case 'soon':
       return {
         borderLeft: '4px solid #ffb300'
+      };
+    case 'overdue':
+      return {
+        borderLeft: '4px solid #ad1457',
+        background: 'linear-gradient(180deg, #fce4ec 0%, white 60px)',
+        boxShadow: '0 2px 8px rgba(173, 20, 87, 0.12)',
+        opacity: 0.92
       };
     default:
       return {
@@ -84,6 +92,20 @@ function getUrgencyBadge(urgency) {
           fontWeight: 600
         }}>
           📅 临近
+        </span>
+      );
+    case 'overdue':
+      return (
+        <span style={{
+          display: 'inline-block',
+          padding: '3px 10px',
+          background: '#ad1457',
+          color: 'white',
+          borderRadius: 10,
+          fontSize: 12,
+          fontWeight: 600
+        }}>
+          ⏰ 已超时
         </span>
       );
     default:

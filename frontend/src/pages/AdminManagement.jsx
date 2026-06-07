@@ -19,10 +19,14 @@ export default function AdminManagement() {
   });
 
   useEffect(() => {
-    if (activeTab === 'festivals') loadFestivals();
+    if (activeTab === 'festivals') { loadFestivals(); loadCakes(); }
     if (activeTab === 'capacity') loadCapacity();
     if (activeTab === 'cakes') loadCakes();
   }, [activeTab]);
+
+  useEffect(() => {
+    loadCakes();
+  }, []);
 
   const loadFestivals = async () => {
     try {
