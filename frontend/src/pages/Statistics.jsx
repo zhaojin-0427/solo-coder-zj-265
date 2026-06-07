@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line
@@ -9,10 +10,13 @@ const COLORS = ['#d4a574', '#b8860b', '#d32f2f', '#388e3c', '#1976d2', '#7b1fa2'
 
 export default function Statistics() {
   const [stats, setStats] = useState(null);
+  const location = useLocation();
 
   useEffect(() => {
     loadStats();
-  }, []);
+    const interval = setInterval(loadStats, 15000);
+    return () => clearInterval(interval);
+  }, [location.pathname]);
 
   const loadStats = async () => {
     try {

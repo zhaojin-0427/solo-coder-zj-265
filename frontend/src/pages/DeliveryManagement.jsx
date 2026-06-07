@@ -23,10 +23,16 @@ export default function DeliveryManagement() {
     return () => clearInterval(interval);
   }, []);
 
-  const loadOrders = async () => {
+  const loadOrders = async (keepSelected = true) => {
     try {
       const res = await api.getOrders();
       setOrders(res.data);
+      if (keepSelected && selectedOrder) {
+        const updated = res.data.find(o => o.id === selectedOrder.id);
+        if (updated) {
+          setSelectedOrder(updated);
+        }
+      }
     } catch (e) {
       console.error(e);
     }
@@ -39,7 +45,7 @@ export default function DeliveryManagement() {
       case 'delivering':
         return orders.filter(o => o.status === 4);
       case 'pickup':
-        return orders.filter(o => o.status >= 3 && o.pickupType === 'pickup');
+        return orders.filter(o => o.status === 3 && o.pickupType === 'pickup');
       case 'completed':
         return orders.filter(o => o.status === 5);
       default:
@@ -55,8 +61,9 @@ export default function DeliveryManagement() {
     api.updateDeliveryStatus(selectedOrder.id, {
       status: 'started',
       ...deliveryForm
-    }).then(() => {
+    }).then(res => {
       setShowStartModal(false);
+      setSelectedOrder(res.data);
       loadOrders();
     }).catch(e => {
       console.error(e);
@@ -72,8 +79,9 @@ export default function DeliveryManagement() {
     api.updateDeliveryStatus(selectedOrder.id, {
       status: 'update',
       ...updateForm
-    }).then(() => {
+    }).then(res => {
       setShowUpdateModal(false);
+      setSelectedOrder(res.data);
       loadOrders();
     }).catch(e => {
       console.error(e);
@@ -84,14 +92,22 @@ export default function DeliveryManagement() {
   const completeDelivery = (orderId) => {
     if (!confirm('确认已送达？')) return;
     api.updateDeliveryStatus(orderId, { status: 'completed' })
-      .then(() => loadOrders())
+      .then(res => {
+        setSelectedOrder(res.data);
+        loadOrders();
+      })
       .catch(e => console.error(e));
   };
 
   const completePickup = (orderId) => {
     if (!confirm('确认客户已取货？')) return;
     api.completeOrder(orderId)
-      .then(() => loadOrders())
+      .then(res => {
+        if (selectedOrder && selectedOrder.id === orderId) {
+          setSelectedOrder(res.data);
+        }
+        loadOrders();
+      })
       .catch(e => console.error(e));
   };
 
